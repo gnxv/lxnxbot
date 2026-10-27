@@ -19,7 +19,7 @@ CREATE TABLE IF NOT EXISTS drafts (
     id SERIAL PRIMARY KEY,
     text TEXT NOT NULL,
     image_path TEXT,
-    status TEXT NOT NULL DEFAULT 'pending',  -- pending / approved / rejected / published
+    status TEXT NOT NULL DEFAULT 'pending',
     created_at TIMESTAMPTZ DEFAULT NOW(),
     published_at TIMESTAMPTZ
 );
@@ -36,32 +36,16 @@ CREATE TABLE IF NOT EXISTS config (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
-
--- Default schedule: 10:00 and 18:00
-INSERT INTO schedule (time_slot) 
-SELECT '10:00'::time WHERE NOT EXISTS (SELECT 1 FROM schedule);
-INSERT INTO schedule (time_slot) 
-SELECT '18:00'::time WHERE NOT EXISTS (SELECT 1 FROM schedule WHERE time_slot = '18:00');
 """
-
-def get_conn():
-    return psycopg.connect(settings.database_url, row_factory=dict_row)
-
-@contextmanager
-def db():
-    conn = get_conn()
-    try:
-        yield conn
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        conn.close()
 
 def init_db():
     with db() as conn:
         conn.execute(SCHEMA)
+        # Insert default schedule only if table is completely empty
+        cur = conn.execute("SELECT COUNT(*) AS cnt FROM schedule")
+        if cur.fetchone()["cnt"] == 0:
+            conn.execute("INSERT INTO schedule (time_slot) VALUES ('10:00'), ('18:00')")
+            logger.info("Inserted default schedule 10:00 and 18:00")
         logger.info("Database schema initialized")
 
 def get_schedule():
