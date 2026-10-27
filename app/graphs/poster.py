@@ -78,19 +78,49 @@ def generate_post_node(state: PosterState) -> PosterState:
     return state
 
 def generate_image_node(state: PosterState) -> PosterState:
-    """Placeholder image for now. Real OpenRouter image call can be added later."""
+    """Generate image via OpenRouter /api/v1/images endpoint."""
+    import base64
+    import httpx
+    from app.config import settings
+
     image_path = settings.temp_images_dir / f"{uuid.uuid4().hex}.png"
+    prompt = state.get("image_prompt") or "realistic photo of kitchen cabinet restoration before and after, professional lighting"
+
     try:
-        from PIL import Image, ImageDraw
-        img = Image.new("RGB", (1024, 1024), color=(245, 245, 245))
-        d = ImageDraw.Draw(img)
-        d.text((80, 480), "Kitchen Restoration", fill=(60, 60, 60))
-        img.save(image_path)
+        resp = httpx.post(
+            "https://openrouter.ai/api/v1/images",
+            headers={
+                "Authorization": f"Bearer {settings.openrouter_api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": settings.model_image,
+                "prompt": prompt,
+                "aspect_ratio": "1:1",
+            },
+            timeout=120.0,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        b64 = data["data"][0]["b64_json"]
+        image_bytes = base64.b64decode(b64)
+        image_path.write_bytes(image_bytes)
         state["image_path"] = str(image_path)
-        logger.info(f"Poster: placeholder image saved to {image_path}")
+        logger.info(f"Poster: real image saved to {image_path}")
     except Exception as e:
-        logger.error(f"Image generation failed: {e}")
-        state["image_path"] = None
+        logger.error(f"OpenRouter image generation failed: {e}")
+        # fallback to placeholder
+        try:
+            from PIL import Image, ImageDraw
+            img = Image.new("RGB", (1024, 1024), color=(245, 245, 245))
+            d = ImageDraw.Draw(img)
+            d.text((80, 480), "Kitchen Restoration", fill=(60, 60, 60))
+            img.save(image_path)
+            state["image_path"] = str(image_path)
+            logger.info("Poster: fell back to placeholder image")
+        except Exception as e2:
+            logger.error(f"Placeholder also failed: {e2}")
+            state["image_path"] = None
         state["error"] = str(e)
     return state
 
