@@ -52,6 +52,7 @@ async def publish_draft(draft_id: int, context: ContextTypes.DEFAULT_TYPE):
         cur = conn.execute("SELECT * FROM drafts WHERE id = %s", (draft_id,))
         draft = cur.fetchone()
     if not draft:
+        logger.warning(f"Draft {draft_id} not found for publish")
         return
     chat_id = settings.telegram_channel_id
     try:
@@ -68,10 +69,25 @@ async def publish_draft(draft_id: int, context: ContextTypes.DEFAULT_TYPE):
         save_post(draft_id, msg.message_id, draft["text"])
         # cleanup image
         if draft["image_path"]:
-            Path(draft["image_path"]).unlink(missing_ok=True)
-        logger.info(f"Published draft {draft_id}")
+            try:
+                Path(draft["image_path"]).unlink(missing_ok=True)
+                logger.info(f"Deleted temp image {draft['image_path']}")
+            except Exception as e:
+                logger.warning(f"Failed to delete image: {e}")
+        logger.info(f"Published draft {draft_id} to channel")
+        # Notify manager
+        if settings.manager_chat_id:
+            await context.bot.send_message(
+                chat_id=settings.manager_chat_id,
+                text=f"Пост опубликован в канал (черновик #{draft_id})."
+            )
     except Exception as e:
         logger.error(f"Publish failed: {e}")
+        if settings.manager_chat_id:
+            await context.bot.send_message(
+                chat_id=settings.manager_chat_id,
+                text=f"Не удалось опубликовать: {e}\nПроверь, что бот — админ в канале и ID канала верный."
+            )
 
 async def run_poster_and_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:

@@ -45,26 +45,36 @@ def classify_node(state: ManagerState) -> ManagerState:
     state["action"] = action
     return state
 
+import re
+from datetime import time
+
+def parse_times(text: str) -> list:
+    """Extract HH:MM times from text."""
+    matches = re.findall(r"\b([01]?\d|2[0-3]):([0-5]\d)\b", text)
+    times = []
+    for h, m in matches:
+        times.append(time(int(h), int(m)))
+    return times
+
 def handle_node(state: ManagerState) -> ManagerState:
     action = state.get("action", "other")
     last_raw = state["messages"][-1] if state["messages"] else ""
     last_msg = last_raw.get("content", "") if isinstance(last_raw, dict) else str(last_raw)
-    last_msg = last_msg.strip().lower()
+    last_msg_lower = last_msg.strip().lower()
     response = ""
 
-    if action == "confirm" or last_msg == "да":
+    if action == "confirm" or last_msg_lower == "да":
         pending = state.get("pending_confirm")
         if pending:
             if pending["type"] == "schedule":
                 set_schedule(pending["times"])
-                response = f"Расписание обновлено: {', '.join(pending['times'])}"
+                response = f"Расписание обновлено: {', '.join(str(t) for t in pending['times'])}"
                 state["pending_confirm"] = None
             elif pending["type"] == "publish":
                 draft = get_pending_draft()
                 if draft:
                     update_draft_status(draft["id"], "approved")
                     response = "Черновик одобрен. Публикую в канал..."
-                    # Keep do_publish so handler can publish
                     state["pending_confirm"] = {"type": "do_publish", "draft_id": draft["id"]}
                 else:
                     response = "Нет черновика на одобрение."
@@ -77,9 +87,13 @@ def handle_node(state: ManagerState) -> ManagerState:
         times = get_schedule()
         response = "Текущее расписание: " + (", ".join(str(t) for t in times) if times else "не задано")
     elif action == "change_schedule":
-        # Extract times roughly via LLM or simple
-        response = "Напиши два времени в формате HH:MM и HH:MM, затем подтверди «да»."
-        # In real use the next message will be parsed
+        times = parse_times(last_msg)
+        if len(times) >= 1:
+            times_str = [f"{t.hour:02d}:{t.minute:02d}" for t in times[:2]]
+            response = f"Меняю расписание на {', '.join(times_str)}. Подтвердите: да"
+            state["pending_confirm"] = {"type": "schedule", "times": times[:2]}
+        else:
+            response = "Напиши два времени в формате 10:00 и 18:00, затем подтверди «да»."
     elif action == "extra_post":
         response = "Запускаю генерацию внеочередного поста. Черновик придёт сюда на одобрение."
         state["pending_confirm"] = {"type": "extra_post"}
