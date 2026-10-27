@@ -38,6 +38,21 @@ CREATE TABLE IF NOT EXISTS config (
 );
 """
 
+def get_conn():
+    return psycopg.connect(settings.database_url, row_factory=dict_row)
+
+@contextmanager
+def db():
+    conn = get_conn()
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
 def init_db():
     with db() as conn:
         conn.execute(SCHEMA)
