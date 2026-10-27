@@ -58,16 +58,19 @@ def handle_node(state: ManagerState) -> ManagerState:
             if pending["type"] == "schedule":
                 set_schedule(pending["times"])
                 response = f"Расписание обновлено: {', '.join(pending['times'])}"
+                state["pending_confirm"] = None
             elif pending["type"] == "publish":
                 draft = get_pending_draft()
                 if draft:
                     update_draft_status(draft["id"], "approved")
                     response = "Черновик одобрен. Публикую в канал..."
-                    # Actual publish happens outside graph (in telegram handler)
+                    # Keep do_publish so handler can publish
                     state["pending_confirm"] = {"type": "do_publish", "draft_id": draft["id"]}
                 else:
                     response = "Нет черновика на одобрение."
-            state["pending_confirm"] = None
+                    state["pending_confirm"] = None
+            else:
+                state["pending_confirm"] = None
         else:
             response = "Нечего подтверждать."
     elif action == "show_schedule":

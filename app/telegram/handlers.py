@@ -32,16 +32,17 @@ async def handle_manager_message(update: Update, context: ContextTypes.DEFAULT_T
         "response": None,
     }
     result = manager_graph.invoke(state)
-    context.user_data["pending_confirm"] = result.get("pending_confirm")
+    # Prefer the pending_confirm that the graph returns (especially do_publish)
+    new_pending = result.get("pending_confirm")
+    context.user_data["pending_confirm"] = new_pending
     if result.get("response"):
         await update.message.reply_text(result["response"])
 
     # Handle side effects
-    pending = result.get("pending_confirm") or context.user_data.get("pending_confirm")
-    if pending and pending.get("type") == "do_publish":
-        await publish_draft(pending["draft_id"], context)
+    if new_pending and new_pending.get("type") == "do_publish":
+        await publish_draft(new_pending["draft_id"], context)
         context.user_data["pending_confirm"] = None
-    elif pending and pending.get("type") == "extra_post":
+    elif new_pending and new_pending.get("type") == "extra_post":
         # Trigger poster
         asyncio.create_task(run_poster_and_send(update, context))
 
@@ -74,7 +75,14 @@ async def publish_draft(draft_id: int, context: ContextTypes.DEFAULT_TYPE):
 
 async def run_poster_and_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        result = poster_graph.invoke({"topic": "реставрация кухонь", "search_results": None, "text": None, "image_prompt": None, "image_path": None, "draft_id": None, "error": None})
+        result = poster_graph.invoke({
+            "topic": "реставрация кухонь",
+            "text": None,
+            "image_prompt": None,
+            "image_path": None,
+            "draft_id": None,
+            "error": None,
+        })
         draft_id = result.get("draft_id")
         if draft_id and update.effective_chat:
             text = result.get("text", "")
@@ -95,6 +103,8 @@ async def run_poster_and_send(update: Update, context: ContextTypes.DEFAULT_TYPE
                 chat_id=update.effective_chat.id,
                 text="Одобрить публикацию в канал? Напиши «да»."
             )
+            # Set pending confirmation so "да" will publish
+            context.user_data["pending_confirm"] = {"type": "publish", "draft_id": draft_id}
     except Exception as e:
         logger.error(f"Poster failed: {e}")
         if update.effective_chat:
