@@ -222,8 +222,20 @@ async def generate_and_show_preview(update: Update, context: ContextTypes.DEFAUL
         chat_id = update.effective_chat.id
         caption = f"Черновик на {run_at.strftime('%d.%m %H:%M') if run_at else 'сейчас'}:\n\n{text[:900]}"
 
-        if preview_paths and Path(preview_paths[0]).exists():
-            with open(preview_paths[0], "rb") as f:
+        valid_paths = [p for p in preview_paths if Path(p).exists()]
+        if len(valid_paths) > 1:
+            from telegram import InputMediaPhoto
+            media = []
+            open_files = []
+            for i, p in enumerate(valid_paths[:10]):  # Telegram limit
+                f = open(p, "rb")
+                open_files.append(f)
+                media.append(InputMediaPhoto(media=f, caption=caption if i == 0 else None))
+            await context.bot.send_media_group(chat_id=chat_id, media=media)
+            for f in open_files:
+                f.close()
+        elif valid_paths:
+            with open(valid_paths[0], "rb") as f:
                 await context.bot.send_photo(
                     chat_id=chat_id,
                     photo=InputFile(f),
