@@ -19,7 +19,7 @@ def get_llm(model: str, temperature: float = 0.7) -> ChatOpenAI:
     )
 
 def get_poster_llm():
-    return get_llm(settings.model_poster, temperature=0.8)
+    return get_llm(settings.model_poster, temperature=0.6)
 
 def get_manager_llm():
     return get_llm(settings.model_manager, temperature=0.3)
