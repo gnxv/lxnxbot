@@ -24,7 +24,25 @@ async def is_manager(update: Update) -> bool:
 async def handle_manager_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await is_manager(update):
         return  # complete silence
-    text = update.message.text or ""
+
+    # Handle photos
+    if update.message.photo:
+        photo = update.message.photo[-1]  # largest
+        file = await photo.get_file()
+        path = settings.temp_images_dir / f"user_{update.message.message_id}.jpg"
+        await file.download_to_drive(path)
+        # Store in user_data for later use
+        context.user_data.setdefault("pending_photos", []).append(str(path))
+        caption = update.message.caption or ""
+        if caption:
+            # Treat caption as the request text
+            text = caption
+        else:
+            await update.message.reply_text("Фото получил. На какую тему написать пост или пришли готовый текст?")
+            return
+    else:
+        text = update.message.text or ""
+
     state = {
         "messages": [{"role": "user", "content": text}],
         "action": None,
@@ -32,8 +50,13 @@ async def handle_manager_message(update: Update, context: ContextTypes.DEFAULT_T
         "response": None,
     }
     result = manager_graph.invoke(state)
-    # Prefer the pending_confirm that the graph returns (especially do_publish)
     new_pending = result.get("pending_confirm")
+    # Attach any pending photos to the confirmation if relevant
+    if new_pending and new_pending.get("type") in ("extra_confirm", "extra_waiting_details"):
+        photos = context.user_data.get("pending_photos")
+        if photos:
+            new_pending["image_paths"] = photos
+            context.user_data["pending_photos"] = []
     context.user_data["pending_confirm"] = new_pending
     if result.get("response"):
         await update.message.reply_text(result["response"])
@@ -43,7 +66,6 @@ async def handle_manager_message(update: Update, context: ContextTypes.DEFAULT_T
         await publish_draft(new_pending["draft_id"], context)
         context.user_data["pending_confirm"] = None
     elif new_pending and new_pending.get("type") == "extra_post":
-        # Trigger poster
         asyncio.create_task(run_poster_and_send(update, context))
 
 async def publish_draft(draft_id: int, context: ContextTypes.DEFAULT_TYPE):
@@ -168,9 +190,9 @@ async def handle_comment(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def build_application() -> Application:
     app = Application.builder().token(settings.telegram_bot_token).build()
-    # Manager chat only
+    # Manager chat (text + photos)
     app.add_handler(MessageHandler(
-        filters.Chat(chat_id=int(settings.manager_chat_id)) & filters.TEXT & ~filters.COMMAND,
+        filters.Chat(chat_id=int(settings.manager_chat_id)) & (filters.TEXT | filters.PHOTO) & ~filters.COMMAND,
         handle_manager_message
     ))
     # Discussion group comments
