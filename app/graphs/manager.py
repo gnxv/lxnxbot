@@ -80,8 +80,10 @@ def extract_topic(text: str) -> str:
 
     # Remove time/date phrases anywhere
     lower = re.sub(r"\b(сейчас|завтра|послезавтра|вечером)\b", " ", lower)
+    lower = re.sub(r"\bв\s+\d{1,2}:\d{2}\b", " ", lower)
     lower = re.sub(r"\b\d{1,2}:\d{2}\b", " ", lower)
     lower = re.sub(r"\b\d{1,2}\.\d{1,2}(?:\.\d{2,4})?\b", " ", lower)
+    lower = re.sub(r"[.]+", " ", lower)
     lower = re.sub(r"\s+", " ", lower).strip(" .,:-")
 
     if not lower or len(lower) < 3:
