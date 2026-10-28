@@ -89,11 +89,13 @@ def handle_node(state: ManagerState) -> ManagerState:
     elif action == "change_schedule":
         times = parse_times(last_msg)
         if len(times) >= 1:
-            times_str = [f"{t.hour:02d}:{t.minute:02d}" for t in times[:2]]
+            # Limit to reasonable number (e.g. 10) to avoid abuse
+            times = times[:10]
+            times_str = [f"{t.hour:02d}:{t.minute:02d}" for t in times]
             response = f"Меняю расписание на {', '.join(times_str)}. Подтвердите: да"
-            state["pending_confirm"] = {"type": "schedule", "times": times[:2]}
+            state["pending_confirm"] = {"type": "schedule", "times": times}
         else:
-            response = "Напиши два времени в формате 10:00 и 18:00, затем подтверди «да»."
+            response = "Напиши времена в формате 10:00, 14:30 и т.д., затем подтверди «да»."
     elif action == "extra_post":
         response = "Запускаю генерацию внеочередного поста. Черновик придёт сюда на одобрение."
         state["pending_confirm"] = {"type": "extra_post"}
