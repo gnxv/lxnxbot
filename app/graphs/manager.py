@@ -132,7 +132,7 @@ def handle_node(state: ManagerState) -> ManagerState:
         if pending:
             if pending["type"] == "schedule":
                 set_schedule(pending["times"])
-                response = f"Расписание обновлено: {', '.join(str(t) for t in pending['times'])}"
+                response = f"Расписание обновлено: {', '.join(f'{t.hour:02d}:{t.minute:02d}' for t in pending['times'])}"
                 state["pending_confirm"] = None
             elif pending["type"] == "publish":
                 draft = get_pending_draft()

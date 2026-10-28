@@ -155,8 +155,10 @@ async def generate_and_show_preview(update: Update, context: ContextTypes.DEFAUL
             })
             text = result.get("text") or "Не удалось сгенерировать текст."
             generated_image = result.get("image_path")
+            if generated_image and not image_paths:
+                image_paths = [generated_image]
 
-        # Prefer user photos
+        # Prefer user photos, fall back to generated
         preview_paths = image_paths if image_paths else ([generated_image] if generated_image else [])
 
         chat_id = update.effective_chat.id
@@ -220,41 +222,6 @@ async def publish_extra_now(pending: dict, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Immediate extra publish failed: {e}")
         if settings.manager_chat_id:
             await context.bot.send_message(settings.manager_chat_id, f"Ошибка публикации: {e}")
-    try:
-        result = poster_graph.invoke({
-            "topic": "реставрация кухонь",
-            "text": None,
-            "image_prompt": None,
-            "image_path": None,
-            "draft_id": None,
-            "error": None,
-        })
-        draft_id = result.get("draft_id")
-        if draft_id and update.effective_chat:
-            text = result.get("text", "")
-            image_path = result.get("image_path")
-            if image_path and Path(image_path).exists():
-                with open(image_path, "rb") as f:
-                    await context.bot.send_photo(
-                        chat_id=update.effective_chat.id,
-                        photo=InputFile(f),
-                        caption=f"Черновик #{draft_id}:\n\n{text[:900]}"
-                    )
-            else:
-                await context.bot.send_message(
-                    chat_id=update.effective_chat.id,
-                    text=f"Черновик #{draft_id}:\n\n{text}"
-                )
-            await context.bot.send_message(
-                chat_id=update.effective_chat.id,
-                text="Одобрить публикацию в канал? Напиши «да»."
-            )
-            # Set pending confirmation so "да" will publish
-            context.user_data["pending_confirm"] = {"type": "publish", "draft_id": draft_id}
-    except Exception as e:
-        logger.error(f"Poster failed: {e}")
-        if update.effective_chat:
-            await context.bot.send_message(update.effective_chat.id, f"Ошибка генерации: {e}")
 
 async def handle_comment(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Incoming comment from discussion group."""
