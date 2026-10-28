@@ -59,13 +59,14 @@ async def _publish_extra(app: Application, extra: dict):
         paths = extra.get("image_paths") or []
         logger.info(f"Publishing extra {extra['id']}: topic={topic}, text_len={len(text)}, photos={len(paths)}")
 
-        # If no ready text but has topic — generate
+        # If no ready text but has topic — generate (pass user photos for vision if any)
         generated_image = None
         if not text and topic:
             result = poster_graph.invoke({
                 "topic": topic,
                 "text": None, "image_prompt": None, "image_path": None,
                 "draft_id": None, "error": None,
+                "image_paths": paths,  # user photos for the model to see
             })
             text = result.get("text") or ""
             generated_image = result.get("image_path")

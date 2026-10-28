@@ -144,12 +144,13 @@ def handle_node(state: ManagerState) -> ManagerState:
     elif action == "show_schedule":
         times = get_schedule()
         extras = get_upcoming_extras()
-        lines = ["Обычное расписание: " + (", ".join(str(t) for t in times) if times else "не задано")]
+        times_str = ", ".join(f"{t.hour:02d}:{t.minute:02d}" for t in times) if times else "не задано"
+        lines = [f"Обычное расписание: {times_str}"]
         if extras:
             lines.append("Внеплановые:")
             for e in extras:
                 t = e["run_at"].astimezone(MSK).strftime("%d.%m %H:%M")
-                desc = e["text"][:60] + "…" if e["text"] else (e["topic"] or "без темы")
+                desc = (e["text"][:50] + "…") if e["text"] else (e["topic"] or "без темы")
                 lines.append(f"— {t} — {desc}")
         response = "\n".join(lines)
 
@@ -227,16 +228,14 @@ def handle_node(state: ManagerState) -> ManagerState:
                 "image_paths": None,  # will be filled by handler if photos present
             }
         else:
-            # Ask for time
+            # Ask for time — short version
             response = (
                 "Поняла.\n"
                 + (f"Тема: {topic}\n" if topic and not ready_text else "")
                 + ("Текст сгенерирую.\n" if not ready_text else "Готовый текст принят.\n")
                 + "Когда опубликовать?\n"
-                "1. Сейчас\n"
-                "2. Сегодня в 17:30\n"
-                "3. Вместо обычного вечернего\n"
-                "4. Напиши точное время (19:15)"
+                "— сейчас\n"
+                "— или напиши точное время и дату (например 28.10 19:15 или просто 19:15)"
             )
             state["pending_confirm"] = {
                 "type": "extra_waiting_details",
