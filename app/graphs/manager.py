@@ -29,14 +29,14 @@ SYSTEM_MANAGER = """Ты — помощник админа канала про �
 
 Распознавай намерения админа (даже если пишет неформально):
 - show_schedule — показать расписание, слоты, что запланировано
-- change_schedule — изменить / поставить / добавить / убрать время постов
-- extra_post — сделать пост сейчас или на время (с фото, темой, готовым текстом или просто «выложи это»)
+- change_schedule — изменить обычное расписание постов (несколько времён в день)
+- extra_post — сделать один пост сейчас или на конкретное время (с фото, темой или просто «опубликуй пост»). Даже если в сообщении есть время — это extra_post, если речь про один пост.
 - approve_draft — одобрить черновик / «да» после показа текста
-- confirm — подтверждение «да», «ок», «публикуй»
+- confirm — подтверждение «да», «ок»
 - cancel — отмена, сброс, «отмени», «нет», «передумал»
 - other
 
-Для extra_post старайся понять тему из свободного текста.
+Важно: «опубликуй пост в 20:40» — это extra_post, а не change_schedule.
 Верни только одно слово действия из списка выше."""
 
 def classify_node(state: ManagerState) -> ManagerState:
@@ -177,6 +177,10 @@ def handle_node(state: ManagerState) -> ManagerState:
             )
             state["response"] = response
             return state
+
+    # Strong override: clear post request beats classifier mistakes
+    if any(w in last_msg_lower for w in ["опубликуй пост", "выложи пост", "сделай пост", "напиши пост", "внеплановый пост"]):
+        action = "extra_post"
 
     if action == "confirm" or last_msg_lower == "да":
         pending = state.get("pending_confirm")
