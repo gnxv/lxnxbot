@@ -246,11 +246,17 @@ async def generate_and_show_preview(update: Update, context: ContextTypes.DEFAUL
 
         await context.bot.send_message(
             chat_id=chat_id,
-            text="Опубликовать этот пост? Напиши «да» или «нет» / «отмена»."
+            text=(
+                "Опубликовать этот пост сейчас? Напиши «да» или «нет» / «отмена»."
+                if (not run_at or abs((run_at - datetime.now(ZoneInfo("Europe/Moscow"))).total_seconds()) < 120)
+                else f"Запланировать этот пост на {run_at.strftime('%d.%m %H:%M')}? Напиши «да» или «нет» / «отмена»."
+            )
         )
 
         # Set confirmation state
-        is_now = run_at and (datetime.now(ZoneInfo("Europe/Moscow")) - run_at).total_seconds() < 120
+        # "сейчас" = within 2 minutes of the requested time (or no time)
+        now = datetime.now(ZoneInfo("Europe/Moscow"))
+        is_now = (not run_at) or abs((run_at - now).total_seconds()) < 120
         context.user_data["pending_confirm"] = {
             "type": "extra_preview_confirm" if is_now else "extra_confirm",
             "run_at": run_at,
