@@ -1,10 +1,10 @@
-"""APScheduler that checks schedule table and triggers Poster (auto-publish)."""
+"""Reliable scheduler: polls DB every 30s and auto-publishes when a slot is due."""
 import logging
-from datetime import datetime
+from datetime import datetime, time as dtime
 from pathlib import Path
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from apscheduler.triggers.cron import CronTrigger
-from app.db import get_schedule, update_draft_status, save_post
+from apscheduler.triggers.interval import IntervalTrigger
+from app.db import get_schedule, update_draft_status, save_post, db
 from app.graphs.poster import poster_graph
 from app.config import settings
 from telegram.ext import Application
@@ -13,10 +13,35 @@ from telegram import InputFile
 logger = logging.getLogger(__name__)
 
 scheduler = AsyncIOScheduler()
+# Track which slots we already published today: "YYYY-MM-DD_HH:MM"
+_published_today: set[str] = set()
 
-async def trigger_poster(app: Application):
-    """Generate and immediately publish a scheduled post."""
-    logger.info("Scheduler: triggering Poster (auto-publish)")
+def _already_published(slot: dtime) -> bool:
+    key = f"{datetime.now().strftime('%Y-%m-%d')}_{slot.hour:02d}:{slot.minute:02d}"
+    return key in _published_today
+
+def _mark_published(slot: dtime):
+    key = f"{datetime.now().strftime('%Y-%m-%d')}_{slot.hour:02d}:{slot.minute:02d}"
+    _published_today.add(key)
+
+async def check_and_publish(app: Application):
+    """Check schedule every interval and publish if a slot is due."""
+    now = datetime.now()
+    current = now.time().replace(second=0, microsecond=0)
+    try:
+        slots = get_schedule()
+        for slot in slots:
+            # Match hour and minute
+            if slot.hour == current.hour and slot.minute == current.minute:
+                if _already_published(slot):
+                    continue
+                logger.info(f"Scheduler: slot {slot} is due, publishing")
+                await _publish_scheduled(app, slot)
+                _mark_published(slot)
+    except Exception as e:
+        logger.error(f"Scheduler check failed: {e}")
+
+async def _publish_scheduled(app: Application, slot: dtime):
     try:
         result = poster_graph.invoke({
             "topic": "реставрация кухонь",
@@ -34,7 +59,6 @@ async def trigger_poster(app: Application):
             logger.error("Scheduler: no draft generated")
             return
 
-        # Publish immediately to channel
         chat_id = settings.telegram_channel_id
         msg = None
         if image_path and Path(image_path).exists():
@@ -51,23 +75,20 @@ async def trigger_poster(app: Application):
         if msg:
             save_post(draft_id, msg.message_id, text)
 
-        # Cleanup image
         if image_path:
             try:
                 Path(image_path).unlink(missing_ok=True)
             except Exception:
                 pass
 
-        logger.info(f"Scheduler: published draft {draft_id}")
-
-        # Notify manager
+        logger.info(f"Scheduler: published draft {draft_id} for slot {slot}")
         if settings.manager_chat_id:
             await app.bot.send_message(
                 chat_id=settings.manager_chat_id,
-                text=f"По расписанию опубликован пост #{draft_id}."
+                text=f"По расписанию ({slot.hour:02d}:{slot.minute:02d}) опубликован пост #{draft_id}."
             )
     except Exception as e:
-        logger.error(f"Scheduled poster failed: {e}")
+        logger.error(f"Scheduled publish failed: {e}")
         if settings.manager_chat_id:
             try:
                 await app.bot.send_message(
@@ -78,17 +99,13 @@ async def trigger_poster(app: Application):
                 pass
 
 def setup_scheduler(app: Application):
-    times = get_schedule()
-    for t in times:
-        hour = t.hour
-        minute = t.minute
-        scheduler.add_job(
-            trigger_poster,
-            CronTrigger(hour=hour, minute=minute),
-            args=[app],
-            id=f"post_{hour}_{minute}",
-            replace_existing=True,
-        )
-        logger.info(f"Scheduled post at {hour:02d}:{minute:02d}")
+    # Poll every 30 seconds — reliable and picks up schedule changes immediately
+    scheduler.add_job(
+        check_and_publish,
+        IntervalTrigger(seconds=30),
+        args=[app],
+        id="schedule_poller",
+        replace_existing=True,
+    )
     scheduler.start()
-    logger.info("Scheduler started")
+    logger.info("Scheduler started (polling every 30s)")
