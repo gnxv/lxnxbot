@@ -18,17 +18,21 @@ class ManagerState(TypedDict):
 SYSTEM_MANAGER = """Ты — помощник админа канала про реставрацию кухонь.
 Отвечай коротко, по-русски, без технического жаргона.
 
-Доступные команды (распознавай намерение):
-- Показать расписание
-- Изменить расписание (на два времени в формате HH:MM)
-- Сделать внеочередной пост
-- Одобрить черновик (да / нет)
+Распознавай намерения:
+- show_schedule — показать расписание
+- change_schedule — изменить расписание
+- extra_post — внеплановый пост (с темой, готовым текстом или фото)
+- approve_draft — одобрить черновик
+- confirm — подтверждение «да»
+- cancel — отмена
+- other
 
-ВАЖНО:
-- Любое изменение (расписание, публикация) требует явного подтверждения словом «да».
-- Сначала предложи действие и спроси «Подтвердите: да».
-- Только после «да» выполняй.
-- Если сообщение не от админа — игнорируй (но сюда доходят только от него)."""
+Для extra_post старайся понять:
+- есть ли готовый текст (тогда topic не нужен)
+- или нужно сгенерировать по теме
+- когда опубликовать (сейчас / вечером / конкретное время)
+
+Верни только одно слово действия из списка выше."""
 
 def classify_node(state: ManagerState) -> ManagerState:
     last = state["messages"][-1] if state["messages"] else ""
@@ -71,6 +75,40 @@ def handle_node(state: ManagerState) -> ManagerState:
     last_msg = last_raw.get("content", "") if isinstance(last_raw, dict) else str(last_raw)
     last_msg_lower = last_msg.strip().lower()
     response = ""
+
+    # Handle time choice for extra post
+    pending = state.get("pending_confirm") or {}
+    if pending.get("type") == "extra_waiting_details":
+        choice = last_msg_lower.strip()
+        run_at = None
+        if choice in ("1", "сейчас", "сейчас."):
+            run_at = datetime.now(MSK)
+        elif choice in ("2", "17:30", "вечером"):
+            run_at = pending.get("evening")
+        elif choice in ("3", "вместо"):
+            # Replace evening — for simplicity schedule at 18:00 and note it
+            run_at = datetime.now(MSK).replace(hour=18, minute=0, second=0, microsecond=0)
+            if run_at < datetime.now(MSK):
+                run_at += timedelta(days=1)
+        else:
+            times = parse_times(last_msg)
+            if times:
+                t = times[0]
+                run_at = datetime.now(MSK).replace(hour=t.hour, minute=t.minute, second=0, microsecond=0)
+                if run_at < datetime.now(MSK):
+                    run_at += timedelta(days=1)
+
+        if run_at:
+            response = f"Ок, публикую {run_at.strftime('%d.%m в %H:%M')}. Подтверди «да»."
+            state["pending_confirm"] = {
+                "type": "extra_confirm",
+                "run_at": run_at,
+                "text": pending.get("text"),
+                "topic": pending.get("topic"),
+                "image_paths": pending.get("image_paths"),
+            }
+            state["response"] = response
+            return state
 
     if action == "confirm" or last_msg_lower == "да":
         pending = state.get("pending_confirm")
@@ -137,22 +175,45 @@ def handle_node(state: ManagerState) -> ManagerState:
                 f"id {e['id']} — {e['run_at'].astimezone(MSK).strftime('%H:%M')}" for e in extras
             )
 
-    elif action == "extra_post" or "опубликуй" in last_msg_lower or "внеплан" in last_msg_lower:
-        # Simple clarification flow
+    elif action == "extra_post" or any(w in last_msg_lower for w in ["опубликуй", "выложи", "внеплан", "пост про", "напиши текст"]):
         now = datetime.now(MSK)
-        # Default evening suggestion
         evening = now.replace(hour=17, minute=30, second=0, microsecond=0)
         if evening < now:
             evening += timedelta(days=1)
+
+        # Rough extraction
+        ready_text = None
+        topic = None
+        if "текст уже" in last_msg_lower or "готовый текст" in last_msg_lower or ":" in last_msg:
+            # Assume text after colon or "текст:" is ready
+            if ":" in last_msg:
+                ready_text = last_msg.split(":", 1)[1].strip()
+        if not ready_text:
+            # Try to pull topic
+            for marker in ["про ", "на тему ", "пост про ", "текст про "]:
+                if marker in last_msg_lower:
+                    topic = last_msg_lower.split(marker, 1)[1].strip().rstrip(".").capitalize()
+                    break
+            if not topic:
+                topic = "реставрация кухонь"
+
         response = (
-            "Поняла, внеплановый пост. Как сделать?\n"
+            "Поняла.\n"
+            + (f"Тема: {topic}\n" if topic and not ready_text else "")
+            + (f"Готовый текст принят.\n" if ready_text else "Текст сгенерирую.\n")
+            + "Когда опубликовать?\n"
             "1. Сейчас\n"
-            "2. Сегодня в 17:30 (перед обычным вечерним)\n"
+            "2. Сегодня в 17:30\n"
             "3. Вместо обычного вечернего\n"
-            "4. Напиши точное время (например 19:15)\n\n"
-            "Если есть готовый текст — пришли его. Если только фото — напиши тему."
+            "4. Напиши точное время (19:15)\n\n"
+            "Подтверди номер или время."
         )
-        state["pending_confirm"] = {"type": "extra_waiting_details", "evening": evening}
+        state["pending_confirm"] = {
+            "type": "extra_waiting_details",
+            "topic": topic if not ready_text else None,
+            "text": ready_text,
+            "evening": evening,
+        }
 
     else:
         response = "Понял. Могу показать расписание, изменить его, сделать внеплановый пост или одобрить черновик."
