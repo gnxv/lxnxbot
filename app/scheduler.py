@@ -34,6 +34,8 @@ async def check_and_publish(app: Application):
     try:
         # Regular slots
         slots = get_schedule()
+        if not slots:
+            logger.warning("Scheduler: no schedule slots configured")
         for slot in slots:
             if slot.hour == current.hour and slot.minute == current.minute:
                 if _already_published(slot):
@@ -49,7 +51,7 @@ async def check_and_publish(app: Application):
             await _publish_extra(app, extra)
             mark_extra_published(extra["id"])
     except Exception as e:
-        logger.error(f"Scheduler check failed: {e}")
+        logger.error(f"Scheduler check failed: {e}", exc_info=True)
 
 async def _publish_extra(app: Application, extra: dict):
     """Publish a one-time extra post (text and/or photos)."""
@@ -136,6 +138,7 @@ async def _publish_scheduled(app: Application, slot: dtime):
         draft_id = result.get("draft_id")
         text = result.get("text", "")
         image_path = result.get("image_path")
+        short_topic = result.get("short_topic")
 
         if not draft_id or not text:
             logger.error("Scheduler: no draft generated")
@@ -193,6 +196,8 @@ async def _publish_scheduled(app: Application, slot: dtime):
 
 def setup_scheduler(app: Application):
     # Poll every 30 seconds — reliable and picks up schedule changes immediately
+    slots = get_schedule()
+    logger.info(f"Scheduler starting. Current slots (MSK): {[f'{s.hour:02d}:{s.minute:02d}' for s in slots] or 'none'}")
     scheduler.add_job(
         check_and_publish,
         IntervalTrigger(seconds=30),
