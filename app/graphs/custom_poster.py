@@ -67,7 +67,7 @@ def generate_custom_node(state: CustomPosterState) -> CustomPosterState:
 
     content_parts = [{"type": "text", "text": user_text}]
 
-    for p in image_paths[:4]:
+    for p in image_paths[:8]:
         if Path(p).exists():
             b64 = base64.b64encode(Path(p).read_bytes()).decode()
             content_parts.append({

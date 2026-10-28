@@ -24,25 +24,83 @@ async def is_manager(update: Update) -> bool:
         and str(update.effective_user.id) in settings.manager_user_ids
     )
 
+# Temporary storage for media groups: media_group_id -> {"photos": [], "caption": "", "task": None}
+_media_groups: dict = {}
+
+async def _process_media_group(media_group_id: str, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Process accumulated photos from one media group after a short delay."""
+    await asyncio.sleep(1.5)  # wait for remaining photos in the album
+    group = _media_groups.pop(media_group_id, None)
+    if not group:
+        return
+    photos = group["photos"]
+    caption = group.get("caption") or ""
+    if not photos:
+        return
+
+    context.user_data.setdefault("pending_photos", []).extend(photos)
+    logger.info(f"Media group {media_group_id}: collected {len(photos)} photos, caption={bool(caption)}")
+
+    if not caption:
+        await update.message.reply_text(
+            f"Получил {len(photos)} фото. На какую тему написать пост или пришли готовый текст?"
+        )
+        return
+
+    # Process as one request with all photos
+    text = caption
+    state = {
+        "messages": [{"role": "user", "content": text}],
+        "action": None,
+        "pending_confirm": context.user_data.get("pending_confirm"),
+        "response": None,
+    }
+    result = manager_graph.invoke(state)
+    new_pending = result.get("pending_confirm")
+    if new_pending and new_pending.get("type") in ("extra_confirm", "extra_waiting_details", "extra_generate_preview", "extra_preview_confirm"):
+        new_pending["image_paths"] = list(context.user_data.get("pending_photos") or [])
+    context.user_data["pending_confirm"] = new_pending
+    if result.get("response"):
+        await update.message.reply_text(result["response"])
+
+    if new_pending and new_pending.get("type") == "extra_generate_preview":
+        asyncio.create_task(generate_and_show_preview(update, context, new_pending))
+
 async def handle_manager_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await is_manager(update):
         return  # complete silence
 
-    # Handle photos
+    # Handle photos (including media groups / albums)
     if update.message.photo:
-        photo = update.message.photo[-1]  # largest
+        photo = update.message.photo[-1]
         file = await photo.get_file()
         path = settings.temp_images_dir / f"user_{update.message.message_id}.jpg"
         await file.download_to_drive(path)
-        # Store in user_data for later use
-        context.user_data.setdefault("pending_photos", []).append(str(path))
-        caption = update.message.caption or ""
-        if caption:
-            # Treat caption as the request text
-            text = caption
-        else:
-            await update.message.reply_text("Фото получил. На какую тему написать пост или пришли готовый текст?")
+
+        media_group_id = update.message.media_group_id
+        if media_group_id:
+            # Album: accumulate and process after short delay
+            if media_group_id not in _media_groups:
+                _media_groups[media_group_id] = {"photos": [], "caption": "", "task": None}
+            _media_groups[media_group_id]["photos"].append(str(path))
+            if update.message.caption:
+                _media_groups[media_group_id]["caption"] = update.message.caption
+            # Restart delay timer so we wait for the last photo
+            if _media_groups[media_group_id]["task"]:
+                _media_groups[media_group_id]["task"].cancel()
+            _media_groups[media_group_id]["task"] = asyncio.create_task(
+                _process_media_group(media_group_id, update, context)
+            )
             return
+        else:
+            # Single photo
+            context.user_data.setdefault("pending_photos", []).append(str(path))
+            caption = update.message.caption or ""
+            if caption:
+                text = caption
+            else:
+                await update.message.reply_text("Фото получил. На какую тему написать пост или пришли готовый текст?")
+                return
     else:
         text = update.message.text or ""
 

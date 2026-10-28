@@ -83,7 +83,7 @@ def generate_post_node(state: PosterState) -> PosterState:
     content_parts.append({"type": "text", "text": text_prompt})
 
     # Attach images if any (vision)
-    for p in image_paths[:4]:  # limit to 4
+    for p in image_paths[:8]:  # limit to 8
         if Path(p).exists():
             import base64
             b64 = base64.b64encode(Path(p).read_bytes()).decode()
