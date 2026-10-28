@@ -232,8 +232,8 @@ def handle_node(state: ManagerState) -> ManagerState:
             lines.append("Внеплановые:")
             for e in extras:
                 t = e["run_at"].astimezone(MSK).strftime("%d.%m %H:%M")
-                desc = (e["text"][:50] + "…") if e["text"] else (e["topic"] or "без темы")
-                lines.append(f"— {t} — {desc}")
+                desc = (e["text"][:40] + "…") if e["text"] else (e["topic"] or "без темы")
+                lines.append(f"— id {e['id']} — {t} — {desc}")
         response = "\n".join(lines)
 
     elif action == "change_schedule":
@@ -246,21 +246,59 @@ def handle_node(state: ManagerState) -> ManagerState:
         else:
             response = "Напиши времена в формате 10:00, 14:30 и т.д., затем подтверди «да»."
 
-    elif any(w in last_msg_lower for w in ["отмени", "отмена", "сброс", "передумал", "нет"]):
-        state["pending_confirm"] = None
-        response = "Ок, отменил. Что дальше?"
-
-    elif "отмени" in last_msg_lower and ("внеплан" in last_msg_lower or "пост" in last_msg_lower):
+    elif "отмени" in last_msg_lower and ("внеплан" in last_msg_lower or "пост" in last_msg_lower or parse_times(last_msg) or re.search(r"\bid\s*\d+\b", last_msg_lower)):
         extras = get_upcoming_extras()
         if not extras:
             response = "Нет запланированных внеплановых постов."
-        elif len(extras) == 1:
-            cancel_extra(extras[0]["id"])
-            response = "Внеплановый пост отменён."
         else:
-            response = "Какой отменить? Напиши id или время.\n" + "\n".join(
-                f"id {e['id']} — {e['run_at'].astimezone(MSK).strftime('%H:%M')}" for e in extras
-            )
+            # Match by id, time, or text fragment
+            matches = []
+            id_match = re.search(r"\bid\s*(\d+)\b", last_msg_lower)
+            times = parse_times(last_msg)
+            # Words that are not command noise
+            noise = {"отмени", "отмена", "внеплановый", "внеплановое", "пост", "посты", "на", "в", "id"}
+            words = [w for w in re.findall(r"[а-яёa-z0-9]+", last_msg_lower) if w not in noise and len(w) > 2]
+
+            for e in extras:
+                run_local = e["run_at"].astimezone(MSK)
+                text_l = ((e.get("text") or "") + " " + (e.get("topic") or "")).lower()
+                if id_match and int(id_match.group(1)) == e["id"]:
+                    matches.append(e)
+                    continue
+                if times and any(run_local.hour == t.hour and run_local.minute == t.minute for t in times):
+                    matches.append(e)
+                    continue
+                if words and any(w in text_l for w in words):
+                    matches.append(e)
+
+            # Deduplicate
+            seen = set()
+            unique = []
+            for m in matches:
+                if m["id"] not in seen:
+                    seen.add(m["id"])
+                    unique.append(m)
+
+            if len(unique) == 1:
+                cancel_extra(unique[0]["id"])
+                t = unique[0]["run_at"].astimezone(MSK).strftime("%d.%m %H:%M")
+                response = f"Отменил внеплановый пост id {unique[0]['id']} ({t})."
+            elif len(unique) > 1:
+                response = "Нашёл несколько. Какой отменить?\n" + "\n".join(
+                    f"id {e['id']} — {e['run_at'].astimezone(MSK).strftime('%d.%m %H:%M')} — {(e['text'] or e['topic'] or '')[:40]}"
+                    for e in unique
+                )
+            elif len(extras) == 1 and not (id_match or times or words):
+                cancel_extra(extras[0]["id"])
+                response = "Внеплановый пост отменён."
+            else:
+                response = "Не нашёл такой пост. Напиши id, время или пару слов из текста.\n" + "\n".join(
+                    f"id {e['id']} — {e['run_at'].astimezone(MSK).strftime('%d.%m %H:%M')}" for e in extras
+                )
+
+    elif any(w in last_msg_lower for w in ["отмени", "отмена", "сброс", "передумал", "нет"]):
+        state["pending_confirm"] = None
+        response = "Ок, отменил. Что дальше?"
 
     elif action == "extra_post" or any(w in last_msg_lower for w in ["опубликуй", "выложи", "внеплан", "пост про", "напиши текст", "сгенерируй"]):
         now = datetime.now(MSK)
