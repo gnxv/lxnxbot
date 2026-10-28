@@ -259,8 +259,8 @@ def handle_node(state: ManagerState) -> ManagerState:
         if evening < now:
             evening += timedelta(days=1)
 
-        # Extract explicit time/date if present
-        run_at = parse_datetime(last_msg, now)
+        # Extract explicit time/date if present; otherwise default to now
+        run_at = parse_datetime(last_msg, now) or now
 
         # Decide if text is ready or needs generation
         ready_text = None
@@ -272,36 +272,19 @@ def handle_node(state: ManagerState) -> ManagerState:
             ready_text = last_msg.split(":", 1)[1].strip()
             topic = None
 
-        if run_at:
-            response = (
-                "Понял.\n"
-                + (f"Тема: {topic}\n" if topic and not ready_text else "")
-                + ("Текст сгенерирую и покажу.\n" if not ready_text else "Готовый текст принят.\n")
-                + f"Время: {run_at.strftime('%d.%m %H:%M')}. Сейчас покажу черновик."
-            )
-            state["pending_confirm"] = {
-                "type": "extra_generate_preview",
-                "run_at": run_at,
-                "text": ready_text,
-                "topic": topic if not ready_text else None,
-                "image_paths": None,
-            }
-        else:
-            response = (
-                "Понял.\n"
-                + (f"Тема: {topic}\n" if topic and not ready_text else "")
-                + ("Текст сгенерирую и покажу.\n" if not ready_text else "Готовый текст принят.\n")
-                + "Когда опубликовать?\n"
-                "— сейчас\n"
-                "— завтра / завтра 19:15\n"
-                "— или время (19:15) / дата (29.10 10:00)"
-            )
-            state["pending_confirm"] = {
-                "type": "extra_waiting_details",
-                "topic": topic if not ready_text else None,
-                "text": ready_text,
-                "evening": evening,
-            }
+        response = (
+            "Понял.\n"
+            + (f"Тема: {topic}\n" if topic and not ready_text else "")
+            + ("Текст сгенерирую и покажу.\n" if not ready_text else "Готовый текст принят.\n")
+            + f"Время: {run_at.strftime('%d.%m %H:%M')}. Сейчас покажу черновик."
+        )
+        state["pending_confirm"] = {
+            "type": "extra_generate_preview",
+            "run_at": run_at,
+            "text": ready_text,
+            "topic": topic if not ready_text else None,
+            "image_paths": None,
+        }
 
     else:
         response = "Понял. Могу: показать расписание, изменить его, сделать пост (с фото или без), отменить текущее. Напиши простыми словами."
