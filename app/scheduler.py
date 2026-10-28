@@ -1,10 +1,11 @@
-"""Reliable scheduler: polls DB every 30s and auto-publishes when a slot is due."""
+"""Reliable scheduler: polls DB every 30s and auto-publishes when a slot is due (MSK)."""
 import logging
 from datetime import datetime, time as dtime
+from zoneinfo import ZoneInfo
 from pathlib import Path
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
-from app.db import get_schedule, update_draft_status, save_post, db
+from app.db import get_schedule, update_draft_status, save_post
 from app.graphs.poster import poster_graph
 from app.config import settings
 from telegram.ext import Application
@@ -12,30 +13,30 @@ from telegram import InputFile
 
 logger = logging.getLogger(__name__)
 
-scheduler = AsyncIOScheduler()
+MSK = ZoneInfo("Europe/Moscow")
+scheduler = AsyncIOScheduler(timezone=MSK)
 # Track which slots we already published today: "YYYY-MM-DD_HH:MM"
 _published_today: set[str] = set()
 
 def _already_published(slot: dtime) -> bool:
-    key = f"{datetime.now().strftime('%Y-%m-%d')}_{slot.hour:02d}:{slot.minute:02d}"
+    key = f"{datetime.now(MSK).strftime('%Y-%m-%d')}_{slot.hour:02d}:{slot.minute:02d}"
     return key in _published_today
 
 def _mark_published(slot: dtime):
-    key = f"{datetime.now().strftime('%Y-%m-%d')}_{slot.hour:02d}:{slot.minute:02d}"
+    key = f"{datetime.now(MSK).strftime('%Y-%m-%d')}_{slot.hour:02d}:{slot.minute:02d}"
     _published_today.add(key)
 
 async def check_and_publish(app: Application):
-    """Check schedule every interval and publish if a slot is due."""
-    now = datetime.now()
+    """Check schedule every interval and publish if a slot is due (MSK)."""
+    now = datetime.now(MSK)
     current = now.time().replace(second=0, microsecond=0)
     try:
         slots = get_schedule()
         for slot in slots:
-            # Match hour and minute
             if slot.hour == current.hour and slot.minute == current.minute:
                 if _already_published(slot):
                     continue
-                logger.info(f"Scheduler: slot {slot} is due, publishing")
+                logger.info(f"Scheduler: slot {slot} (MSK) is due, publishing")
                 await _publish_scheduled(app, slot)
                 _mark_published(slot)
     except Exception as e:
