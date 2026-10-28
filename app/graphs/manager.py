@@ -18,20 +18,16 @@ class ManagerState(TypedDict):
 SYSTEM_MANAGER = """Ты — помощник админа канала про реставрацию кухонь.
 Отвечай коротко, по-русски, без технического жаргона.
 
-Распознавай намерения:
-- show_schedule — показать расписание
-- change_schedule — изменить расписание
-- extra_post — внеплановый пост (с темой, готовым текстом или фото)
-- approve_draft — одобрить черновик
-- confirm — подтверждение «да»
-- cancel — отмена
+Распознавай намерения админа (даже если пишет неформально):
+- show_schedule — показать расписание, слоты, что запланировано
+- change_schedule — изменить / поставить / добавить / убрать время постов
+- extra_post — сделать пост сейчас или на время (с фото, темой, готовым текстом или просто «выложи это»)
+- approve_draft — одобрить черновик / «да» после показа текста
+- confirm — подтверждение «да», «ок», «публикуй»
+- cancel — отмена, сброс, «отмени», «нет», «передумал»
 - other
 
-Для extra_post старайся понять:
-- есть ли готовый текст (тогда topic не нужен)
-- или нужно сгенерировать по теме
-- когда опубликовать (сейчас / вечером / конкретное время)
-
+Для extra_post старайся понять тему из свободного текста.
 Верни только одно слово действия из списка выше."""
 
 def classify_node(state: ManagerState) -> ManagerState:
@@ -51,6 +47,24 @@ def classify_node(state: ManagerState) -> ManagerState:
 
 import re
 from datetime import time
+
+def extract_topic(text: str) -> str:
+    """Best-effort topic extraction from free-form admin message."""
+    lower = text.lower().strip()
+    # Remove common request prefixes
+    for prefix in [
+        "напиши пост", "сделай пост", "выложи", "опубликуй", "пост про",
+        "напиши про", "сделай про", "это наша", "наша новая работа",
+        "новая работа", "работа", "пост", "тема"
+    ]:
+        if lower.startswith(prefix):
+            lower = lower[len(prefix):].strip(" :,.-")
+            break
+    # Cut at time mentions
+    lower = re.sub(r"\s*(сейчас|в\s+\d{1,2}:\d{2}|на\s+\d{1,2}:\d{2}).*", "", lower).strip()
+    if not lower or len(lower) < 3:
+        return "наша новая работа"
+    return lower[0].upper() + lower[1:] if lower else "наша новая работа"
 
 def parse_times(text: str) -> list:
     """Extract HH:MM times from text."""
@@ -99,9 +113,12 @@ def handle_node(state: ManagerState) -> ManagerState:
                     run_at += timedelta(days=1)
 
         if run_at:
-            response = f"Ок, публикую {run_at.strftime('%d.%m в %H:%M')}. Подтверди «да»."
+            # Time chosen — request preview generation
+            response = (
+                "Генерирую черновик. Сейчас покажу текст, потом подтвердишь публикацию."
+            )
             state["pending_confirm"] = {
-                "type": "extra_confirm",
+                "type": "extra_generate_preview",
                 "run_at": run_at,
                 "text": pending.get("text"),
                 "topic": pending.get("topic"),
@@ -127,15 +144,23 @@ def handle_node(state: ManagerState) -> ManagerState:
                     response = "Нет черновика на одобрение."
                     state["pending_confirm"] = None
             elif pending["type"] == "extra_confirm":
-                # Save the extra post
+                # This type is now set after preview is shown and admin confirms
                 eid = save_extra_post(
                     run_at=pending["run_at"],
                     text=pending.get("text"),
                     topic=pending.get("topic"),
                     image_paths=pending.get("image_paths") or [],
                 )
-                response = f"Запланировала внеплановый пост на {pending['run_at'].strftime('%H:%M')} (id {eid})."
+                response = f"Пост запланирован на {pending['run_at'].strftime('%d.%m %H:%M')} (id {eid})."
                 state["pending_confirm"] = None
+            elif pending["type"] == "extra_preview_confirm":
+                # Immediate publish after preview
+                state["pending_confirm"] = {
+                    "type": "do_publish_extra",
+                    "text": pending.get("text"),
+                    "image_paths": pending.get("image_paths") or [],
+                }
+                response = "Публикую в канал..."
             else:
                 state["pending_confirm"] = None
         else:
@@ -163,6 +188,10 @@ def handle_node(state: ManagerState) -> ManagerState:
             state["pending_confirm"] = {"type": "schedule", "times": times}
         else:
             response = "Напиши времена в формате 10:00, 14:30 и т.д., затем подтверди «да»."
+
+    elif any(w in last_msg_lower for w in ["отмени", "отмена", "сброс", "передумал", "нет"]):
+        state["pending_confirm"] = None
+        response = "Ок, отменил. Что дальше?"
 
     elif "отмени" in last_msg_lower and ("внеплан" in last_msg_lower or "пост" in last_msg_lower):
         extras = get_upcoming_extras()
@@ -193,49 +222,36 @@ def handle_node(state: ManagerState) -> ManagerState:
 
         # Decide if text is ready or needs generation
         ready_text = None
-        topic = None
-        generate = any(w in last_msg_lower for w in ["сгенерируй", "напиши текст", "напиши пост", "придумай"])
+        topic = extract_topic(last_msg)
+        generate = any(w in last_msg_lower for w in ["сгенерируй", "напиши текст", "напиши пост", "придумай", "сделай пост"])
 
-        if not generate and ("готовый текст" in last_msg_lower or "текст уже" in last_msg_lower or (":" in last_msg and "тема" not in last_msg_lower)):
-            if ":" in last_msg:
-                ready_text = last_msg.split(":", 1)[1].strip()
-        else:
-            # Extract topic
-            for marker in ["тема ", "про ", "на тему ", "пост про ", "текст про "]:
-                if marker in last_msg_lower:
-                    topic = last_msg_lower.split(marker, 1)[1].strip()
-                    # Clean trailing time mentions
-                    topic = re.sub(r"\s*в\s+\d{1,2}:\d{2}.*", "", topic).strip().rstrip(".")
-                    if topic:
-                        topic = topic[0].upper() + topic[1:]
-                    break
-            if not topic:
-                topic = "реставрация кухонь"
+        # If message looks like ready text (has colon and is long enough, no generation words)
+        if not generate and ":" in last_msg and len(last_msg.split(":", 1)[1].strip()) > 40:
+            ready_text = last_msg.split(":", 1)[1].strip()
+            topic = None
 
         if run_at:
-            # Time already known — go straight to confirmation
             response = (
-                "Поняла.\n"
+                "Понял.\n"
                 + (f"Тема: {topic}\n" if topic and not ready_text else "")
-                + ("Текст сгенерирую.\n" if not ready_text else "Готовый текст принят.\n")
-                + f"Публикую {run_at.strftime('%d.%m в %H:%M')}. Подтверди «да»."
+                + ("Текст сгенерирую и покажу.\n" if not ready_text else "Готовый текст принят.\n")
+                + f"Время: {run_at.strftime('%d.%m %H:%M')}. Сейчас покажу черновик."
             )
             state["pending_confirm"] = {
-                "type": "extra_confirm",
+                "type": "extra_generate_preview",
                 "run_at": run_at,
                 "text": ready_text,
                 "topic": topic if not ready_text else None,
-                "image_paths": None,  # will be filled by handler if photos present
+                "image_paths": None,
             }
         else:
-            # Ask for time — short version
             response = (
-                "Поняла.\n"
+                "Понял.\n"
                 + (f"Тема: {topic}\n" if topic and not ready_text else "")
-                + ("Текст сгенерирую.\n" if not ready_text else "Готовый текст принят.\n")
+                + ("Текст сгенерирую и покажу.\n" if not ready_text else "Готовый текст принят.\n")
                 + "Когда опубликовать?\n"
                 "— сейчас\n"
-                "— или напиши точное время и дату (например 28.10 19:15 или просто 19:15)"
+                "— или напиши время (например 19:15)"
             )
             state["pending_confirm"] = {
                 "type": "extra_waiting_details",
@@ -245,7 +261,7 @@ def handle_node(state: ManagerState) -> ManagerState:
             }
 
     else:
-        response = "Понял. Могу показать расписание, изменить его, сделать внеплановый пост или одобрить черновик."
+        response = "Понял. Могу: показать расписание, изменить его, сделать пост (с фото или без), отменить текущее. Напиши простыми словами."
 
     state["response"] = response
     if "messages" in state:

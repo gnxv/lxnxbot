@@ -1,12 +1,15 @@
 """Telegram bot handlers. Routes to graphs."""
 import logging
 import asyncio
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from telegram import Update, InputFile
 from telegram.ext import Application, MessageHandler, filters, ContextTypes
 from app.config import settings
 from app.graphs.manager import manager_graph
 from app.graphs.moderator import moderator_graph
 from app.graphs.responder import responder_graph
+from app.graphs.custom_poster import custom_poster_graph
 from app.graphs.poster import poster_graph
 from app.db import get_pending_draft, update_draft_status, save_post
 from pathlib import Path
@@ -53,7 +56,7 @@ async def handle_manager_message(update: Update, context: ContextTypes.DEFAULT_T
     new_pending = result.get("pending_confirm")
     # Attach photos if we have them and this is an extra-related pending
     photos = context.user_data.get("pending_photos") or []
-    if new_pending and photos and new_pending.get("type") in ("extra_confirm", "extra_waiting_details"):
+    if new_pending and photos and new_pending.get("type") in ("extra_confirm", "extra_waiting_details", "extra_generate_preview", "extra_preview_confirm"):
         new_pending["image_paths"] = list(photos)
         logger.info(f"Attached {len(photos)} photos to pending {new_pending.get('type')}")
     context.user_data["pending_confirm"] = new_pending
@@ -68,8 +71,12 @@ async def handle_manager_message(update: Update, context: ContextTypes.DEFAULT_T
     if new_pending and new_pending.get("type") == "do_publish":
         await publish_draft(new_pending["draft_id"], context)
         context.user_data["pending_confirm"] = None
-    elif new_pending and new_pending.get("type") == "extra_post":
-        asyncio.create_task(run_poster_and_send(update, context))
+    elif new_pending and new_pending.get("type") == "do_publish_extra":
+        await publish_extra_now(new_pending, context)
+        context.user_data["pending_confirm"] = None
+        context.user_data["pending_photos"] = []
+    elif new_pending and new_pending.get("type") == "extra_generate_preview":
+        asyncio.create_task(generate_and_show_preview(update, context, new_pending))
 
 async def publish_draft(draft_id: int, context: ContextTypes.DEFAULT_TYPE):
     from app.db import get_conn
@@ -124,7 +131,95 @@ async def publish_draft(draft_id: int, context: ContextTypes.DEFAULT_TYPE):
                 text=f"Не удалось опубликовать: {e}\nПроверь, что бот — админ в канале и ID канала верный."
             )
 
-async def run_poster_and_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def generate_and_show_preview(update: Update, context: ContextTypes.DEFAULT_TYPE, pending: dict):
+    """Generate text (if needed) and show preview to admin before publishing."""
+    try:
+        topic = pending.get("topic") or "наша новая работа"
+        ready_text = pending.get("text")
+        image_paths = pending.get("image_paths") or context.user_data.get("pending_photos") or []
+        run_at = pending.get("run_at")
+
+        text = ready_text
+        generated_image = None
+        if not text:
+            use_custom = bool(image_paths) or (topic and "реставрация кухонь" not in topic.lower())
+            graph = custom_poster_graph if use_custom else poster_graph
+            result = graph.invoke({
+                "topic": topic,
+                "text": None,
+                "image_prompt": None,
+                "image_path": None,
+                "image_paths": image_paths,
+                "draft_id": None,
+                "error": None,
+            })
+            text = result.get("text") or "Не удалось сгенерировать текст."
+            generated_image = result.get("image_path")
+
+        # Prefer user photos
+        preview_paths = image_paths if image_paths else ([generated_image] if generated_image else [])
+
+        chat_id = update.effective_chat.id
+        caption = f"Черновик на {run_at.strftime('%d.%m %H:%M') if run_at else 'сейчас'}:\n\n{text[:900]}"
+
+        if preview_paths and Path(preview_paths[0]).exists():
+            with open(preview_paths[0], "rb") as f:
+                await context.bot.send_photo(
+                    chat_id=chat_id,
+                    photo=InputFile(f),
+                    caption=caption
+                )
+        else:
+            await context.bot.send_message(chat_id=chat_id, text=caption)
+
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text="Опубликовать этот пост? Напиши «да» или «нет» / «отмена»."
+        )
+
+        # Set confirmation state
+        is_now = run_at and (datetime.now(ZoneInfo("Europe/Moscow")) - run_at).total_seconds() < 120
+        context.user_data["pending_confirm"] = {
+            "type": "extra_preview_confirm" if is_now else "extra_confirm",
+            "run_at": run_at,
+            "text": text,
+            "topic": topic,
+            "image_paths": image_paths,
+        }
+    except Exception as e:
+        logger.error(f"Preview generation failed: {e}")
+        if update.effective_chat:
+            await context.bot.send_message(update.effective_chat.id, f"Ошибка генерации черновика: {e}")
+
+async def publish_extra_now(pending: dict, context: ContextTypes.DEFAULT_TYPE):
+    """Publish already-generated extra post immediately."""
+    from telegram import InputMediaPhoto
+    text = pending.get("text") or ""
+    paths = pending.get("image_paths") or []
+    chat_id = settings.telegram_channel_id
+    try:
+        if paths:
+            media = []
+            open_files = []
+            for i, p in enumerate(paths):
+                if Path(p).exists():
+                    f = open(p, "rb")
+                    open_files.append(f)
+                    media.append(InputMediaPhoto(media=f, caption=text[:1024] if i == 0 and text else None))
+            if media:
+                await context.bot.send_media_group(chat_id=chat_id, media=media)
+                for f in open_files:
+                    f.close()
+            elif text:
+                await context.bot.send_message(chat_id=chat_id, text=text)
+        elif text:
+            await context.bot.send_message(chat_id=chat_id, text=text)
+        if settings.manager_chat_id:
+            await context.bot.send_message(settings.manager_chat_id, "Пост опубликован в канал.")
+    except Exception as e:
+        logger.error(f"Immediate extra publish failed: {e}")
+        if settings.manager_chat_id:
+            await context.bot.send_message(settings.manager_chat_id, f"Ошибка публикации: {e}")
     try:
         result = poster_graph.invoke({
             "topic": "реставрация кухонь",
