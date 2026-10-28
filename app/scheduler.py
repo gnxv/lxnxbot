@@ -60,6 +60,7 @@ async def _publish_extra(app: Application, extra: dict):
         logger.info(f"Publishing extra {extra['id']}: topic={topic}, text_len={len(text)}, photos={len(paths)}")
 
         # If no ready text but has topic — generate
+        generated_image = None
         if not text and topic:
             result = poster_graph.invoke({
                 "topic": topic,
@@ -67,7 +68,13 @@ async def _publish_extra(app: Application, extra: dict):
                 "draft_id": None, "error": None,
             })
             text = result.get("text") or ""
-            logger.info(f"Generated text for extra {extra['id']}, length={len(text)}")
+            generated_image = result.get("image_path")
+            logger.info(f"Generated text for extra {extra['id']}, length={len(text)}, image={generated_image}")
+
+        # Prefer user photos; fall back to generated image
+        if not paths and generated_image and Path(generated_image).exists():
+            paths = [generated_image]
+            logger.info(f"Using generated image for extra {extra['id']}")
 
         if not text and not paths:
             raise ValueError("Nothing to publish (no text and no photos)")
