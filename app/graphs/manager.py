@@ -1,13 +1,22 @@
 """Manager graph: only responds in manager chat from manager user. Handles schedule, approval, extra posts."""
 import logging
+import re
+from datetime import datetime, time, timedelta
 from typing import TypedDict, Optional, Literal
+from zoneinfo import ZoneInfo
 from langgraph.graph import StateGraph, END
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
 from app.llm import get_manager_llm
-from app.db import get_schedule, set_schedule, get_pending_draft, update_draft_status
+from app.db import (
+    get_schedule, set_schedule, get_pending_draft, update_draft_status,
+    get_upcoming_extras, save_extra_post, cancel_extra, get_pending_extras
+)
 from app.config import settings
 
 logger = logging.getLogger(__name__)
+
+MSK = ZoneInfo("Europe/Moscow")
+
 
 class ManagerState(TypedDict):
     messages: list
@@ -45,8 +54,6 @@ def classify_node(state: ManagerState) -> ManagerState:
     state["action"] = action
     return state
 
-import re
-from datetime import time
 
 def extract_topic(text: str) -> str:
     """Best-effort topic extraction from free-form admin message."""
@@ -125,14 +132,7 @@ def parse_datetime(text: str, now: datetime = None) -> Optional[datetime]:
 
     return None
 
-from app.db import (
-    get_schedule, set_schedule, get_pending_draft, update_draft_status,
-    get_upcoming_extras, save_extra_post, cancel_extra, get_pending_extras
-)
-from datetime import datetime, timedelta
-from zoneinfo import ZoneInfo
 
-MSK = ZoneInfo("Europe/Moscow")
 
 def handle_node(state: ManagerState) -> ManagerState:
     action = state.get("action", "other")
