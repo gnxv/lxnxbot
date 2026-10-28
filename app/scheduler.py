@@ -57,6 +57,7 @@ async def _publish_extra(app: Application, extra: dict):
         text = extra.get("text") or ""
         topic = extra.get("topic")
         paths = extra.get("image_paths") or []
+        logger.info(f"Publishing extra {extra['id']}: topic={topic}, text_len={len(text)}, photos={len(paths)}")
 
         # If no ready text but has topic — generate
         if not text and topic:
@@ -66,19 +67,27 @@ async def _publish_extra(app: Application, extra: dict):
                 "draft_id": None, "error": None,
             })
             text = result.get("text") or ""
+            logger.info(f"Generated text for extra {extra['id']}, length={len(text)}")
+
+        if not text and not paths:
+            raise ValueError("Nothing to publish (no text and no photos)")
 
         if paths:
-            # Send as album if multiple
             media = []
+            open_files = []
             for i, p in enumerate(paths):
                 if Path(p).exists():
-                    media.append(InputMediaPhoto(media=open(p, "rb"), caption=text if i == 0 else None))
+                    f = open(p, "rb")
+                    open_files.append(f)
+                    media.append(InputMediaPhoto(media=f, caption=text[:1024] if i == 0 and text else None))
             if media:
                 await app.bot.send_media_group(chat_id=chat_id, media=media)
-                # close files
-                for m in media:
-                    if hasattr(m.media, "close"):
-                        m.media.close()
+                for f in open_files:
+                    f.close()
+            else:
+                # photos listed but files missing
+                if text:
+                    await app.bot.send_message(chat_id=chat_id, text=text)
         elif text:
             await app.bot.send_message(chat_id=chat_id, text=text)
 
@@ -87,8 +96,17 @@ async def _publish_extra(app: Application, extra: dict):
                 chat_id=settings.manager_chat_id,
                 text=f"Внеплановый пост опубликован (id {extra['id']})."
             )
+        logger.info(f"Extra {extra['id']} published successfully")
     except Exception as e:
-        logger.error(f"Extra publish failed: {e}")
+        logger.error(f"Extra publish failed: {e}", exc_info=True)
+        if settings.manager_chat_id:
+            try:
+                await app.bot.send_message(
+                    chat_id=settings.manager_chat_id,
+                    text=f"Ошибка публикации внепланового (id {extra.get('id')}): {e}"
+                )
+            except Exception:
+                pass
 
 async def _publish_scheduled(app: Application, slot: dtime):
     try:
