@@ -62,7 +62,19 @@ def generate_post_node(state: PosterState) -> PosterState:
     if recent:
         recent_text = "\n\nПоследние посты (не повторяй эти темы и сюжеты):\n" + "\n---\n".join(recent[:10])
 
-    prompt = f"Сгенерируй один новый готовый пост. Придумай свежую тему внутри одной из рубрик.{recent_text}"
+    custom_topic = state.get("topic")
+    if custom_topic and custom_topic.lower() not in ("реставрация кухонь", "кухни", ""):
+        # Force the custom topic while keeping the style
+        prompt = (
+            f"Напиши пост строго на тему: «{custom_topic}».\n"
+            "Сохрани стиль и тон РЕСТАВРАТОРА (ирония, простые объяснения, польза или лёгкий юмор).\n"
+            "Если тема мемная или юмористическая — сделай пост в духе рубрики «Кухонные мемы».\n"
+            "Не уходи в другую тему."
+            f"{recent_text}"
+        )
+    else:
+        prompt = f"Сгенерируй один новый готовый пост. Придумай свежую тему внутри одной из рубрик.{recent_text}"
+
     resp = llm.invoke([SystemMessage(content=SYSTEM_POSTER), HumanMessage(content=prompt)])
     content = resp.content.strip()
 
