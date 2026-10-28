@@ -19,6 +19,13 @@ class Settings(BaseSettings):
     telegram_discussion_group_id: str = os.getenv("TELEGRAM_DISCUSSION_GROUP_ID", "")
     manager_chat_id: str = os.getenv("MANAGER_CHAT_ID", "")
     manager_user_id: str = os.getenv("MANAGER_USER_ID", "")
+
+    @property
+    def manager_user_ids(self) -> set[str]:
+        """Support one or several user IDs separated by comma or space."""
+        raw = self.manager_user_id or ""
+        parts = [p.strip() for p in raw.replace(" ", ",").split(",") if p.strip()]
+        return set(parts)
     
     database_url: str = os.getenv("DATABASE_URL", "postgresql://user:password@localhost:5432/kitchenbot")
     

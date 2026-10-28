@@ -18,7 +18,7 @@ async def is_manager(update: Update) -> bool:
         return False
     return (
         str(update.effective_chat.id) == settings.manager_chat_id
-        and str(update.effective_user.id) == settings.manager_user_id
+        and str(update.effective_user.id) in settings.manager_user_ids
     )
 
 async def handle_manager_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
