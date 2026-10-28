@@ -56,15 +56,25 @@ async def publish_draft(draft_id: int, context: ContextTypes.DEFAULT_TYPE):
         return
     chat_id = settings.telegram_channel_id
     try:
+        caption = draft["text"]
+        rest = None
+        if len(caption) > 1024:
+            caption = draft["text"][:1000].rsplit(" ", 1)[0] + "…"
+            rest = draft["text"][len(caption)-1:].strip()
+            logger.info(f"Publish: text too long ({len(draft['text'])}), splitting")
+
         if draft["image_path"] and Path(draft["image_path"]).exists():
             with open(draft["image_path"], "rb") as f:
                 msg = await context.bot.send_photo(
                     chat_id=chat_id,
                     photo=InputFile(f),
-                    caption=draft["text"][:1024]
+                    caption=caption
                 )
         else:
-            msg = await context.bot.send_message(chat_id=chat_id, text=draft["text"])
+            msg = await context.bot.send_message(chat_id=chat_id, text=caption)
+
+        if rest and msg:
+            await context.bot.send_message(chat_id=chat_id, text=rest, reply_to_message_id=msg.message_id)
         update_draft_status(draft_id, "published")
         save_post(draft_id, msg.message_id, draft["text"])
         # cleanup image

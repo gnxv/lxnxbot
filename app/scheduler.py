@@ -62,15 +62,26 @@ async def _publish_scheduled(app: Application, slot: dtime):
 
         chat_id = settings.telegram_channel_id
         msg = None
+        caption = text
+        rest = None
+        if len(text) > 1024:
+            # Safety: split so photo has short caption, rest goes as separate message
+            caption = text[:1000].rsplit(" ", 1)[0] + "…"
+            rest = text[len(caption)-1:].strip()
+            logger.info(f"Scheduler: text too long ({len(text)}), splitting")
+
         if image_path and Path(image_path).exists():
             with open(image_path, "rb") as f:
                 msg = await app.bot.send_photo(
                     chat_id=chat_id,
                     photo=InputFile(f),
-                    caption=text[:1024]
+                    caption=caption
                 )
         else:
-            msg = await app.bot.send_message(chat_id=chat_id, text=text)
+            msg = await app.bot.send_message(chat_id=chat_id, text=caption)
+
+        if rest and msg:
+            await app.bot.send_message(chat_id=chat_id, text=rest, reply_to_message_id=msg.message_id)
 
         update_draft_status(draft_id, "published")
         if msg:
