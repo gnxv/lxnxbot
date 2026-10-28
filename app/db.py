@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS posts (
     draft_id INTEGER REFERENCES drafts(id),
     telegram_message_id BIGINT,
     text TEXT,
+    topic TEXT,
     published_at TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -132,18 +133,21 @@ def update_draft_status(draft_id: int, status: str):
             (status, status, draft_id)
         )
 
-def save_post(draft_id: int, message_id: int, text: str):
+def save_post(draft_id: int, message_id: int, text: str, topic: str = None):
     with db() as conn:
+        # Ensure topic column exists (safe for existing DBs)
+        conn.execute("ALTER TABLE posts ADD COLUMN IF NOT EXISTS topic TEXT")
         conn.execute(
-            "INSERT INTO posts (draft_id, telegram_message_id, text) VALUES (%s, %s, %s)",
-            (draft_id, message_id, text)
+            "INSERT INTO posts (draft_id, telegram_message_id, text, topic) VALUES (%s, %s, %s, %s)",
+            (draft_id, message_id, text, topic)
         )
 
-def get_recent_posts(limit: int = 10) -> list:
-    """Return texts of the last N published posts (newest first)."""
+def get_recent_posts(limit: int = 12) -> list:
+    """Return short topics of the last N published posts (newest first)."""
     with db() as conn:
+        conn.execute("ALTER TABLE posts ADD COLUMN IF NOT EXISTS topic TEXT")
         cur = conn.execute(
-            "SELECT text FROM posts ORDER BY published_at DESC LIMIT %s",
+            "SELECT COALESCE(topic, LEFT(text, 40)) AS topic FROM posts ORDER BY published_at DESC LIMIT %s",
             (limit,)
         )
-        return [row["text"] for row in cur.fetchall()]
+        return [row["topic"] for row in cur.fetchall() if row["topic"]]

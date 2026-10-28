@@ -166,7 +166,7 @@ async def _publish_scheduled(app: Application, slot: dtime):
 
         update_draft_status(draft_id, "published")
         if msg:
-            save_post(draft_id, msg.message_id, text)
+            save_post(draft_id, msg.message_id, text, topic=short_topic)
 
         if image_path:
             try:

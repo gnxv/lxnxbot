@@ -272,20 +272,36 @@ def handle_node(state: ManagerState) -> ManagerState:
             ready_text = last_msg.split(":", 1)[1].strip()
             topic = None
 
-        # Always ask for time — two clear options only
-        response = (
-            "Понял.\n"
-            + (f"Тема: {topic}\n" if topic and not ready_text else "")
-            + ("Текст сгенерирую и покажу.\n" if not ready_text else "Готовый текст принят.\n")
-            + "Когда опубликовать?\n"
-            "— сейчас\n"
-            "— или напиши время (19:15) или дату и время (29.10 10:00)"
-        )
-        state["pending_confirm"] = {
-            "type": "extra_waiting_details",
-            "topic": topic if not ready_text else None,
-            "text": ready_text,
-        }
+        # If explicit time/date is already in the message — don't ask again
+        run_at = parse_datetime(last_msg)
+        if run_at:
+            response = (
+                "Понял.\n"
+                + (f"Тема: {topic}\n" if topic and not ready_text else "")
+                + ("Текст сгенерирую и покажу.\n" if not ready_text else "Готовый текст принят.\n")
+                + f"Время: {run_at.strftime('%d.%m %H:%M')}. Сейчас покажу черновик."
+            )
+            state["pending_confirm"] = {
+                "type": "extra_generate_preview",
+                "run_at": run_at,
+                "text": ready_text,
+                "topic": topic if not ready_text else None,
+            }
+        else:
+            # No time given — ask
+            response = (
+                "Понял.\n"
+                + (f"Тема: {topic}\n" if topic and not ready_text else "")
+                + ("Текст сгенерирую и покажу.\n" if not ready_text else "Готовый текст принят.\n")
+                + "Когда опубликовать?\n"
+                "— сейчас\n"
+                "— или напиши время (19:15) или дату и время (29.10 10:00)"
+            )
+            state["pending_confirm"] = {
+                "type": "extra_waiting_details",
+                "topic": topic if not ready_text else None,
+                "text": ready_text,
+            }
 
     else:
         response = "Понял. Могу: показать расписание, изменить его, сделать пост (с фото или без), отменить текущее. Напиши простыми словами."

@@ -59,16 +59,19 @@ SYSTEM_POSTER = """Ты ведёшь Telegram-канал «РЕСТАВРАТО�
 POST:
 <готовый текст поста>
 
+TOPIC:
+<2-3 слова — суть поста, например "провисшая петля" или "плёнка или эмаль">
+
 IMAGE_PROMPT:
 <детальный промпт на английском для реалистичной фотографии именно по теме поста>
 """
 
 def generate_post_node(state: PosterState) -> PosterState:
     llm = get_poster_llm()
-    recent = get_recent_posts(10)
+    recent = get_recent_posts(12)
     recent_text = ""
     if recent:
-        recent_text = "\n\nПоследние посты (не повторяй эти темы и сюжеты):\n" + "\n---\n".join(recent[:10])
+        recent_text = "\n\nПоследние темы (не повторяй):\n" + "\n".join(f"- {t}" for t in recent[:12])
 
     custom_topic = state.get("topic")
     image_paths = state.get("image_paths") or []
@@ -107,32 +110,47 @@ def generate_post_node(state: PosterState) -> PosterState:
 
     text = None
     image_prompt = "realistic photo of kitchen cabinet restoration before and after, professional lighting, modern interior"
+    short_topic = None
 
-    if "POST:" in content and "IMAGE_PROMPT:" in content:
+    if "POST:" in content:
         try:
-            post_part = content.split("POST:")[1].split("IMAGE_PROMPT:")[0].strip()
-            img_part = content.split("IMAGE_PROMPT:")[1].strip()
-            if post_part:
+            after_post = content.split("POST:")[1]
+            # Extract TOPIC if present
+            if "TOPIC:" in after_post:
+                post_part = after_post.split("TOPIC:")[0].strip()
+                topic_part = after_post.split("TOPIC:")[1]
+                if "IMAGE_PROMPT:" in topic_part:
+                    short_topic = topic_part.split("IMAGE_PROMPT:")[0].strip()
+                    image_prompt = topic_part.split("IMAGE_PROMPT:")[1].strip() or image_prompt
+                else:
+                    short_topic = topic_part.strip()
                 text = post_part
-            if img_part:
-                image_prompt = img_part
+            elif "IMAGE_PROMPT:" in after_post:
+                text = after_post.split("IMAGE_PROMPT:")[0].strip()
+                image_prompt = after_post.split("IMAGE_PROMPT:")[1].strip() or image_prompt
+            else:
+                text = after_post.strip()
         except Exception:
             pass
 
     if not text:
-        # fallback: take everything as text if parsing failed
-        text = content.replace("POST:", "").replace("IMAGE_PROMPT:", "").strip()
+        text = content.replace("POST:", "").replace("TOPIC:", "").replace("IMAGE_PROMPT:", "").strip()
         if len(text) < 50:
             text = (
                 "Реставрация кухни часто обходится в 3–5 раз дешевле новой. "
                 "Покраска фасадов, замена фурнитуры и столешницы дают эффект «как новая» "
-                "без полного демонтажа. Главное — правильная подготовка поверхности.\n\n"
-                "А вы уже делали реставрацию или только планируете?"
+                "без полного демонтажа. Главное — правильная подготовка поверхности."
             )
+
+    # Fallback short topic from first words if model didn't give one
+    if not short_topic and text:
+        words = text.replace("\n", " ").split()
+        short_topic = " ".join(words[:4]).rstrip(".,:")
 
     state["text"] = text
     state["image_prompt"] = image_prompt
-    logger.info(f"Poster: post generated, length={len(text)}")
+    state["short_topic"] = short_topic
+    logger.info(f"Poster: post generated, length={len(text)}, topic={short_topic}")
     return state
 
 def generate_image_node(state: PosterState) -> PosterState:
@@ -188,7 +206,9 @@ def save_draft_node(state: PosterState) -> PosterState:
         return state
     draft_id = save_draft(state["text"], state.get("image_path"))
     state["draft_id"] = draft_id
-    logger.info(f"Poster: draft saved id={draft_id}")
+    # Stash short topic on the draft object via a side channel isn't easy;
+    # we'll recover it from the result in the caller when possible.
+    logger.info(f"Poster: draft saved id={draft_id}, topic={state.get('short_topic')}")
     return state
 
 def build_poster_graph():
