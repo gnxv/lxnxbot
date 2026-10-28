@@ -96,6 +96,13 @@ def update_draft_status(draft_id: int, status: str):
             (status, status, draft_id)
         )
 
+def save_post(draft_id: int, message_id: int, text: str):
+    with db() as conn:
+        conn.execute(
+            "INSERT INTO posts (draft_id, telegram_message_id, text) VALUES (%s, %s, %s)",
+            (draft_id, message_id, text)
+        )
+
 def get_recent_posts(limit: int = 10) -> list:
     """Return texts of the last N published posts (newest first)."""
     with db() as conn:
