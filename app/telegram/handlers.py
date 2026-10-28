@@ -51,15 +51,19 @@ async def handle_manager_message(update: Update, context: ContextTypes.DEFAULT_T
     }
     result = manager_graph.invoke(state)
     new_pending = result.get("pending_confirm")
-    # Attach any pending photos to the confirmation if relevant
-    if new_pending and new_pending.get("type") in ("extra_confirm", "extra_waiting_details"):
-        photos = context.user_data.get("pending_photos")
-        if photos:
-            new_pending["image_paths"] = photos
-            context.user_data["pending_photos"] = []
+    # Always try to attach any pending photos
+    photos = context.user_data.get("pending_photos") or []
+    if new_pending and photos:
+        new_pending["image_paths"] = photos
+        # Don't clear yet — clear only after successful save
     context.user_data["pending_confirm"] = new_pending
     if result.get("response"):
         await update.message.reply_text(result["response"])
+
+    # Clear photos after they have been attached to a confirmed extra
+    if new_pending is None and context.user_data.get("pending_photos"):
+        # If confirm succeeded, photos should have been saved; clear them
+        context.user_data["pending_photos"] = []
 
     # Handle side effects
     if new_pending and new_pending.get("type") == "do_publish":

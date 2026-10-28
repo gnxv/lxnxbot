@@ -132,7 +132,7 @@ def handle_node(state: ManagerState) -> ManagerState:
                     run_at=pending["run_at"],
                     text=pending.get("text"),
                     topic=pending.get("topic"),
-                    image_paths=pending.get("image_paths"),
+                    image_paths=pending.get("image_paths") or [],
                 )
                 response = f"Запланировала внеплановый пост на {pending['run_at'].strftime('%H:%M')} (id {eid})."
                 state["pending_confirm"] = None
