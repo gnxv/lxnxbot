@@ -61,7 +61,7 @@ def extract_topic(text: str) -> str:
             lower = lower[len(prefix):].strip(" :,.-")
             break
     # Cut at time mentions
-    lower = re.sub(r"\s*(сейчас|в\s+\d{1,2}:\d{2}|на\s+\d{1,2}:\d{2}).*", "", lower).strip()
+    lower = re.sub(r"\s*(сейчас|завтра|послезавтра|в\s+\d{1,2}:\d{2}|на\s+\d{1,2}:\d{2}|\d{1,2}\.\d{1,2}).*", "", lower).strip()
     if not lower or len(lower) < 3:
         return "наша новая работа"
     return lower[0].upper() + lower[1:] if lower else "наша новая работа"
@@ -73,6 +73,57 @@ def parse_times(text: str) -> list:
     for h, m in matches:
         times.append(time(int(h), int(m)))
     return times
+
+def parse_datetime(text: str, now: datetime = None) -> Optional[datetime]:
+    """Parse flexible date/time expressions into a datetime (MSK)."""
+    if now is None:
+        now = datetime.now(MSK)
+    lower = text.lower().strip()
+
+    # Relative days
+    target_date = now.date()
+    if "послезавтра" in lower:
+        target_date = now.date() + timedelta(days=2)
+    elif "завтра" in lower:
+        target_date = now.date() + timedelta(days=1)
+
+    # Explicit date DD.MM or DD.MM.YYYY
+    date_match = re.search(r"\b(\d{1,2})\.(\d{1,2})(?:\.(\d{2,4}))?\b", lower)
+    if date_match:
+        d, m = int(date_match.group(1)), int(date_match.group(2))
+        y = int(date_match.group(3)) if date_match.group(3) else now.year
+        if y < 100:
+            y += 2000
+        try:
+            target_date = datetime(y, m, d).date()
+        except ValueError:
+            pass
+
+    # Time HH:MM
+    times = parse_times(text)
+    if times:
+        t = times[0]
+        run_at = datetime.combine(target_date, t).replace(tzinfo=MSK)
+        # If only time given and it's already passed today, move to tomorrow
+        if "завтра" not in lower and "послезавтра" not in lower and not date_match and run_at <= now:
+            run_at += timedelta(days=1)
+        return run_at
+
+    # No explicit time — use reasonable defaults
+    if "завтра" in lower or "послезавтра" in lower or date_match:
+        # Default to 10:00 if only date mentioned
+        return datetime.combine(target_date, time(10, 0)).replace(tzinfo=MSK)
+
+    if lower in ("сейчас", "сейчас.", "1"):
+        return now
+
+    if lower in ("вечером", "17:30", "2"):
+        evening = now.replace(hour=17, minute=30, second=0, microsecond=0)
+        if evening <= now:
+            evening += timedelta(days=1)
+        return evening
+
+    return None
 
 from app.db import (
     get_schedule, set_schedule, get_pending_draft, update_draft_status,
@@ -93,25 +144,7 @@ def handle_node(state: ManagerState) -> ManagerState:
     # Handle time choice for extra post
     pending = state.get("pending_confirm") or {}
     if pending.get("type") == "extra_waiting_details":
-        choice = last_msg_lower.strip()
-        run_at = None
-        if choice in ("1", "сейчас", "сейчас."):
-            run_at = datetime.now(MSK)
-        elif choice in ("2", "17:30", "вечером"):
-            run_at = pending.get("evening")
-        elif choice in ("3", "вместо"):
-            # Replace evening — for simplicity schedule at 18:00 and note it
-            run_at = datetime.now(MSK).replace(hour=18, minute=0, second=0, microsecond=0)
-            if run_at < datetime.now(MSK):
-                run_at += timedelta(days=1)
-        else:
-            times = parse_times(last_msg)
-            if times:
-                t = times[0]
-                run_at = datetime.now(MSK).replace(hour=t.hour, minute=t.minute, second=0, microsecond=0)
-                if run_at < datetime.now(MSK):
-                    run_at += timedelta(days=1)
-
+        run_at = parse_datetime(last_msg)
         if run_at:
             # Time chosen — request preview generation
             response = (
@@ -211,14 +244,8 @@ def handle_node(state: ManagerState) -> ManagerState:
         if evening < now:
             evening += timedelta(days=1)
 
-        # Extract explicit time if present
-        explicit_times = parse_times(last_msg)
-        run_at = None
-        if explicit_times:
-            t = explicit_times[0]
-            run_at = now.replace(hour=t.hour, minute=t.minute, second=0, microsecond=0)
-            if run_at < now:
-                run_at += timedelta(days=1)
+        # Extract explicit time/date if present
+        run_at = parse_datetime(last_msg, now)
 
         # Decide if text is ready or needs generation
         ready_text = None
@@ -251,7 +278,8 @@ def handle_node(state: ManagerState) -> ManagerState:
                 + ("Текст сгенерирую и покажу.\n" if not ready_text else "Готовый текст принят.\n")
                 + "Когда опубликовать?\n"
                 "— сейчас\n"
-                "— или напиши время (например 19:15)"
+                "— завтра / завтра 19:15\n"
+                "— или время (19:15) / дата (29.10 10:00)"
             )
             state["pending_confirm"] = {
                 "type": "extra_waiting_details",
