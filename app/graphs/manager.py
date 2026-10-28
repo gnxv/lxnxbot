@@ -131,19 +131,9 @@ def parse_datetime(text: str, now: datetime = None) -> Optional[datetime]:
             run_at += timedelta(days=1)
         return run_at
 
-    # No explicit time — use reasonable defaults
-    if "завтра" in lower or "послезавтра" in lower or date_match:
-        # Default to 10:00 if only date mentioned
-        return datetime.combine(target_date, time(10, 0)).replace(tzinfo=MSK)
-
+    # No explicit time — only accept explicit "сейчас"
     if lower in ("сейчас", "сейчас.", "1"):
         return now
-
-    if lower in ("вечером", "17:30", "2"):
-        evening = now.replace(hour=17, minute=30, second=0, microsecond=0)
-        if evening <= now:
-            evening += timedelta(days=1)
-        return evening
 
     return None
 
@@ -159,12 +149,16 @@ def handle_node(state: ManagerState) -> ManagerState:
     # Handle time choice for extra post
     pending = state.get("pending_confirm") or {}
     if pending.get("type") == "extra_waiting_details":
-        run_at = parse_datetime(last_msg)
+        choice = last_msg_lower.strip()
+        run_at = None
+        if choice in ("сейчас", "сейчас.", "1"):
+            run_at = datetime.now(MSK)
+        else:
+            # Only accept clear time or date+time
+            run_at = parse_datetime(last_msg)
+
         if run_at:
-            # Time chosen — request preview generation
-            response = (
-                "Генерирую черновик. Сейчас покажу текст, потом подтвердишь публикацию."
-            )
+            response = "Генерирую черновик. Сейчас покажу текст, потом подтвердишь публикацию."
             state["pending_confirm"] = {
                 "type": "extra_generate_preview",
                 "run_at": run_at,
@@ -172,6 +166,15 @@ def handle_node(state: ManagerState) -> ManagerState:
                 "topic": pending.get("topic"),
                 "image_paths": pending.get("image_paths"),
             }
+            state["response"] = response
+            return state
+        else:
+            response = (
+                "Не понял время. Напиши:\n"
+                "— сейчас\n"
+                "— или время (19:15)\n"
+                "— или дату и время (29.10 10:00)"
+            )
             state["response"] = response
             return state
 
@@ -259,9 +262,6 @@ def handle_node(state: ManagerState) -> ManagerState:
         if evening < now:
             evening += timedelta(days=1)
 
-        # Extract explicit time/date if present; otherwise default to now
-        run_at = parse_datetime(last_msg, now) or now
-
         # Decide if text is ready or needs generation
         ready_text = None
         topic = extract_topic(last_msg)
@@ -272,18 +272,19 @@ def handle_node(state: ManagerState) -> ManagerState:
             ready_text = last_msg.split(":", 1)[1].strip()
             topic = None
 
+        # Always ask for time — two clear options only
         response = (
             "Понял.\n"
             + (f"Тема: {topic}\n" if topic and not ready_text else "")
             + ("Текст сгенерирую и покажу.\n" if not ready_text else "Готовый текст принят.\n")
-            + f"Время: {run_at.strftime('%d.%m %H:%M')}. Сейчас покажу черновик."
+            + "Когда опубликовать?\n"
+            "— сейчас\n"
+            "— или напиши время (19:15) или дату и время (29.10 10:00)"
         )
         state["pending_confirm"] = {
-            "type": "extra_generate_preview",
-            "run_at": run_at,
-            "text": ready_text,
+            "type": "extra_waiting_details",
             "topic": topic if not ready_text else None,
-            "image_paths": None,
+            "text": ready_text,
         }
 
     else:
