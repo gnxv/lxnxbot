@@ -7,6 +7,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from app.db import get_schedule, update_draft_status, save_post, get_pending_extras, mark_extra_published
 from app.graphs.poster import poster_graph
+from app.graphs.custom_poster import custom_poster_graph
 from app.config import settings
 from telegram.ext import Application
 from telegram import InputFile, InputMediaPhoto
