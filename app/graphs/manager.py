@@ -85,7 +85,7 @@ def extract_topic(text: str) -> str:
     lower = re.sub(r"\s+", " ", lower).strip(" .,:-")
 
     if not lower or len(lower) < 3:
-        return "наша новая работа"
+        return None
     return lower[0].upper() + lower[1:]
 
 def parse_times(text: str) -> list:

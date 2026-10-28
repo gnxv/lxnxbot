@@ -192,7 +192,7 @@ async def publish_draft(draft_id: int, context: ContextTypes.DEFAULT_TYPE):
 async def generate_and_show_preview(update: Update, context: ContextTypes.DEFAULT_TYPE, pending: dict):
     """Generate text (if needed) and show preview to admin before publishing."""
     try:
-        topic = pending.get("topic") or "наша новая работа"
+        topic = pending.get("topic")  # may be None
         ready_text = pending.get("text")
         image_paths = pending.get("image_paths") or context.user_data.get("pending_photos") or []
         run_at = pending.get("run_at")
@@ -200,10 +200,11 @@ async def generate_and_show_preview(update: Update, context: ContextTypes.DEFAUL
         text = ready_text
         generated_image = None
         if not text:
-            use_custom = bool(image_paths) or (topic and "реставрация кухонь" not in topic.lower())
+            # Use custom only when there is an explicit topic or user photos
+            use_custom = bool(image_paths) or bool(topic)
             graph = custom_poster_graph if use_custom else poster_graph
             result = graph.invoke({
-                "topic": topic,
+                "topic": topic or "реставрация кухонь",
                 "text": None,
                 "image_prompt": None,
                 "image_path": None,
