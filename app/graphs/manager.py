@@ -56,6 +56,15 @@ def parse_times(text: str) -> list:
         times.append(time(int(h), int(m)))
     return times
 
+from app.db import (
+    get_schedule, set_schedule, get_pending_draft, update_draft_status,
+    get_upcoming_extras, save_extra_post, cancel_extra, get_pending_extras
+)
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
+
+MSK = ZoneInfo("Europe/Moscow")
+
 def handle_node(state: ManagerState) -> ManagerState:
     action = state.get("action", "other")
     last_raw = state["messages"][-1] if state["messages"] else ""
@@ -79,38 +88,78 @@ def handle_node(state: ManagerState) -> ManagerState:
                 else:
                     response = "Нет черновика на одобрение."
                     state["pending_confirm"] = None
+            elif pending["type"] == "extra_confirm":
+                # Save the extra post
+                eid = save_extra_post(
+                    run_at=pending["run_at"],
+                    text=pending.get("text"),
+                    topic=pending.get("topic"),
+                    image_paths=pending.get("image_paths"),
+                )
+                response = f"Запланировала внеплановый пост на {pending['run_at'].strftime('%H:%M')} (id {eid})."
+                state["pending_confirm"] = None
             else:
                 state["pending_confirm"] = None
         else:
             response = "Нечего подтверждать."
+
     elif action == "show_schedule":
         times = get_schedule()
-        response = "Текущее расписание: " + (", ".join(str(t) for t in times) if times else "не задано")
+        extras = get_upcoming_extras()
+        lines = ["Обычное расписание: " + (", ".join(str(t) for t in times) if times else "не задано")]
+        if extras:
+            lines.append("Внеплановые:")
+            for e in extras:
+                t = e["run_at"].astimezone(MSK).strftime("%d.%m %H:%M")
+                desc = e["text"][:60] + "…" if e["text"] else (e["topic"] or "без темы")
+                lines.append(f"— {t} — {desc}")
+        response = "\n".join(lines)
+
     elif action == "change_schedule":
         times = parse_times(last_msg)
         if len(times) >= 1:
-            # Limit to reasonable number (e.g. 10) to avoid abuse
             times = times[:10]
             times_str = [f"{t.hour:02d}:{t.minute:02d}" for t in times]
             response = f"Меняю расписание на {', '.join(times_str)}. Подтвердите: да"
             state["pending_confirm"] = {"type": "schedule", "times": times}
         else:
             response = "Напиши времена в формате 10:00, 14:30 и т.д., затем подтверди «да»."
-    elif action == "extra_post":
-        response = "Запускаю генерацию внеочередного поста. Черновик придёт сюда на одобрение."
-        state["pending_confirm"] = {"type": "extra_post"}
-    elif action == "approve_draft":
-        draft = get_pending_draft()
-        if draft:
-            response = f"Черновик:\n\n{draft['text'][:500]}...\n\nОдобрить публикацию? Напиши «да»."
-            state["pending_confirm"] = {"type": "publish", "draft_id": draft["id"]}
+
+    elif "отмени" in last_msg_lower and ("внеплан" in last_msg_lower or "пост" in last_msg_lower):
+        extras = get_upcoming_extras()
+        if not extras:
+            response = "Нет запланированных внеплановых постов."
+        elif len(extras) == 1:
+            cancel_extra(extras[0]["id"])
+            response = "Внеплановый пост отменён."
         else:
-            response = "Нет черновиков на одобрение."
+            response = "Какой отменить? Напиши id или время.\n" + "\n".join(
+                f"id {e['id']} — {e['run_at'].astimezone(MSK).strftime('%H:%M')}" for e in extras
+            )
+
+    elif action == "extra_post" or "опубликуй" in last_msg_lower or "внеплан" in last_msg_lower:
+        # Simple clarification flow
+        now = datetime.now(MSK)
+        # Default evening suggestion
+        evening = now.replace(hour=17, minute=30, second=0, microsecond=0)
+        if evening < now:
+            evening += timedelta(days=1)
+        response = (
+            "Поняла, внеплановый пост. Как сделать?\n"
+            "1. Сейчас\n"
+            "2. Сегодня в 17:30 (перед обычным вечерним)\n"
+            "3. Вместо обычного вечернего\n"
+            "4. Напиши точное время (например 19:15)\n\n"
+            "Если есть готовый текст — пришли его. Если только фото — напиши тему."
+        )
+        state["pending_confirm"] = {"type": "extra_waiting_details", "evening": evening}
+
     else:
-        response = "Понял. Могу показать расписание, изменить его, сделать внеочередной пост или одобрить черновик."
+        response = "Понял. Могу показать расписание, изменить его, сделать внеплановый пост или одобрить черновик."
 
     state["response"] = response
-    state["messages"].append(AIMessage(content=response))
+    if "messages" in state:
+        state["messages"].append(AIMessage(content=response))
     return state
 
 def build_manager_graph():

@@ -32,11 +32,47 @@ CREATE TABLE IF NOT EXISTS posts (
     published_at TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE TABLE IF NOT EXISTS config (
-    key TEXT PRIMARY KEY,
-    value TEXT NOT NULL
+CREATE TABLE IF NOT EXISTS extra_posts (
+    id SERIAL PRIMARY KEY,
+    run_at TIMESTAMPTZ NOT NULL,
+    text TEXT,
+    topic TEXT,
+    image_paths TEXT[],  -- array of local paths
+    status TEXT NOT NULL DEFAULT 'pending',  -- pending / published / cancelled
+    created_at TIMESTAMPTZ DEFAULT NOW()
 );
 """
+
+def get_pending_extras():
+    with db() as conn:
+        cur = conn.execute(
+            "SELECT * FROM extra_posts WHERE status = 'pending' AND run_at <= NOW() ORDER BY run_at"
+        )
+        return cur.fetchall()
+
+def get_upcoming_extras():
+    with db() as conn:
+        cur = conn.execute(
+            "SELECT * FROM extra_posts WHERE status = 'pending' AND run_at > NOW() ORDER BY run_at"
+        )
+        return cur.fetchall()
+
+def save_extra_post(run_at, text=None, topic=None, image_paths=None):
+    with db() as conn:
+        cur = conn.execute(
+            """INSERT INTO extra_posts (run_at, text, topic, image_paths)
+               VALUES (%s, %s, %s, %s) RETURNING id""",
+            (run_at, text, topic, image_paths or [])
+        )
+        return cur.fetchone()["id"]
+
+def cancel_extra(extra_id: int):
+    with db() as conn:
+        conn.execute("UPDATE extra_posts SET status = 'cancelled' WHERE id = %s", (extra_id,))
+
+def mark_extra_published(extra_id: int):
+    with db() as conn:
+        conn.execute("UPDATE extra_posts SET status = 'published' WHERE id = %s", (extra_id,))
 
 def get_conn():
     return psycopg.connect(settings.database_url, row_factory=dict_row)
