@@ -8,6 +8,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 from app.db import get_schedule, update_draft_status, save_post, get_pending_extras, mark_extra_published
 from app.graphs.poster import poster_graph
 from app.graphs.custom_poster import custom_poster_graph
+from app.graphs.custom_poster import custom_poster_graph
 from app.config import settings
 from telegram.ext import Application
 from telegram import InputFile, InputMediaPhoto
@@ -60,18 +61,24 @@ async def _publish_extra(app: Application, extra: dict):
         paths = extra.get("image_paths") or []
         logger.info(f"Publishing extra {extra['id']}: topic={topic}, text_len={len(text)}, photos={len(paths)}")
 
-        # If no ready text but has topic — generate (pass user photos for vision if any)
+        # Generate text if needed
         generated_image = None
-        if not text and topic:
-            result = poster_graph.invoke({
-                "topic": topic,
-                "text": None, "image_prompt": None, "image_path": None,
-                "draft_id": None, "error": None,
-                "image_paths": paths,  # user photos for the model to see
+        if not text:
+            use_custom = bool(paths) or (topic and "реставрация кухонь" not in (topic or "").lower())
+            graph = custom_poster_graph if use_custom else poster_graph
+            logger.info(f"Extra {extra['id']}: using {'custom_poster' if use_custom else 'regular poster'}, photos={len(paths)}")
+            result = graph.invoke({
+                "topic": topic or "наша новая работа",
+                "text": None,
+                "image_prompt": None,
+                "image_path": None,
+                "image_paths": paths,
+                "draft_id": None,
+                "error": None,
             })
             text = result.get("text") or ""
             generated_image = result.get("image_path")
-            logger.info(f"Generated text for extra {extra['id']}, length={len(text)}, image={generated_image}")
+            logger.info(f"Generated for extra {extra['id']}: len={len(text)}, gen_image={generated_image}")
 
         # Prefer user photos; fall back to generated image
         if not paths and generated_image and Path(generated_image).exists():
