@@ -58,20 +58,35 @@ def classify_node(state: ManagerState) -> ManagerState:
 def extract_topic(text: str) -> str:
     """Best-effort topic extraction from free-form admin message."""
     lower = text.lower().strip()
-    # Remove common request prefixes
+
+    # Prefer explicit topic markers
+    for marker in ["на тему ", "про ", "тема ", "пост про ", "текст про "]:
+        if marker in lower:
+            topic = lower.split(marker, 1)[1].strip()
+            # Clean trailing time/date mentions
+            topic = re.sub(r"\s*(сейчас|завтра|послезавтра|в\s+\d{1,2}:\d{2}|на\s+\d{1,2}:\d{2}|\d{1,2}\.\d{1,2}.*)", "", topic).strip(" .,:-")
+            if topic and len(topic) >= 3:
+                return topic[0].upper() + topic[1:]
+
+    # Fallback: strip request prefixes and time expressions
     for prefix in [
-        "напиши пост", "сделай пост", "выложи", "опубликуй", "пост про",
-        "напиши про", "сделай про", "это наша", "наша новая работа",
+        "напиши пост", "сделай пост", "выложи", "опубликуй пост", "опубликуй",
+        "пост про", "напиши про", "сделай про", "это наша", "наша новая работа",
         "новая работа", "работа", "пост", "тема"
     ]:
         if lower.startswith(prefix):
             lower = lower[len(prefix):].strip(" :,.-")
             break
-    # Cut at time mentions
-    lower = re.sub(r"\s*(сейчас|завтра|послезавтра|в\s+\d{1,2}:\d{2}|на\s+\d{1,2}:\d{2}|\d{1,2}\.\d{1,2}).*", "", lower).strip()
+
+    # Remove time/date phrases anywhere
+    lower = re.sub(r"\b(сейчас|завтра|послезавтра|вечером)\b", " ", lower)
+    lower = re.sub(r"\b\d{1,2}:\d{2}\b", " ", lower)
+    lower = re.sub(r"\b\d{1,2}\.\d{1,2}(?:\.\d{2,4})?\b", " ", lower)
+    lower = re.sub(r"\s+", " ", lower).strip(" .,:-")
+
     if not lower or len(lower) < 3:
         return "наша новая работа"
-    return lower[0].upper() + lower[1:] if lower else "наша новая работа"
+    return lower[0].upper() + lower[1:]
 
 def parse_times(text: str) -> list:
     """Extract HH:MM times from text."""
