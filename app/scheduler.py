@@ -23,6 +23,27 @@ logger = logging.getLogger(__name__)
 MSK = ZoneInfo("Europe/Moscow")
 scheduler = AsyncIOScheduler(timezone=MSK)
 
+# Generic topics that should still use the regular poster (auto-style)
+_GENERIC_TOPICS = {
+    "",
+    "реставрация кухонь",
+    "кухни",
+    "наша новая работа",
+}
+
+def _should_use_custom(topic: str | None, image_paths: list | None) -> bool:
+    """
+    Clear rule (same as in handlers):
+    - User photos → always custom
+    - Explicit non-generic topic → custom
+    - Otherwise → regular poster
+    """
+    paths = image_paths or []
+    if paths:
+        return True
+    t = (topic or "").strip().lower()
+    return bool(t) and t not in _GENERIC_TOPICS
+
 def _already_published(slot: dtime) -> bool:
     today = datetime.now(MSK).date()
     return is_slot_published(today, slot)
@@ -68,9 +89,9 @@ async def _publish_extra(app: Application, extra: dict):
 
         generated_image = None
         if not text:
-            use_custom = bool(paths) or (topic and "реставрация кухонь" not in (topic or "").lower())
+            use_custom = _should_use_custom(topic, paths)
             graph = custom_poster_graph if use_custom else poster_graph
-            logger.info(f"Extra {extra['id']}: using {'custom_poster' if use_custom else 'regular poster'}, photos={len(paths)}")
+            logger.info(f"Extra {extra['id']}: using {'custom' if use_custom else 'regular'} poster, photos={len(paths)}, topic={topic!r}")
             result = graph.invoke({
                 "topic": topic or "наша новая работа",
                 "text": None,

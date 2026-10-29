@@ -16,6 +16,27 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+# Generic topics that should still use the regular poster (auto-style)
+_GENERIC_TOPICS = {
+    "",
+    "реставрация кухонь",
+    "кухни",
+    "наша новая работа",
+}
+
+def _should_use_custom(topic: str | None, image_paths: list | None) -> bool:
+    """
+    Clear rule:
+    - User photos → always custom
+    - Explicit non-generic topic → custom
+    - Otherwise (empty / generic topic, no photos) → regular poster
+    """
+    paths = image_paths or []
+    if paths:
+        return True
+    t = (topic or "").strip().lower()
+    return bool(t) and t not in _GENERIC_TOPICS
+
 async def is_manager(update: Update) -> bool:
     if not update.effective_chat or not update.effective_user:
         return False
@@ -200,9 +221,9 @@ async def generate_and_show_preview(update: Update, context: ContextTypes.DEFAUL
         text = ready_text
         generated_image = None
         if not text:
-            # Use custom only when there is an explicit topic or user photos
-            use_custom = bool(image_paths) or bool(topic)
+            use_custom = _should_use_custom(topic, image_paths)
             graph = custom_poster_graph if use_custom else poster_graph
+            logger.info(f"Preview: using {'custom' if use_custom else 'regular'} poster, photos={len(image_paths)}, topic={topic!r}")
             result = graph.invoke({
                 "topic": topic or "реставрация кухонь",
                 "text": None,
