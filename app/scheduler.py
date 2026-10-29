@@ -141,7 +141,7 @@ async def _publish_scheduled(app: Application, slot: dtime):
         text = result.get("text") or ""
         image_path = result.get("image_path")
         draft_id = result.get("draft_id")
-        short_topic = result.get("short_topic")
+        short_topic = result.get("short_topic") or ""
 
         if not text:
             logger.error("Scheduler: no draft generated")
@@ -180,11 +180,12 @@ async def _publish_scheduled(app: Application, slot: dtime):
             except Exception:
                 pass
 
-        logger.info(f"Scheduler: published draft {draft_id} for slot {slot}")
+        logger.info(f"Scheduler: published draft {draft_id} for slot {slot}, topic={short_topic}, len={len(text)}")
         if settings.manager_chat_id:
+            topic_part = f" «{short_topic}»" if short_topic else ""
             await app.bot.send_message(
                 chat_id=settings.manager_chat_id,
-                text=f"По расписанию ({slot.hour:02d}:{slot.minute:02d}) опубликован пост #{draft_id}."
+                text=f"По расписанию ({slot.hour:02d}:{slot.minute:02d}) опубликован пост #{draft_id}{topic_part} ({len(text)} симв.)."
             )
     except Exception as e:
         logger.error(f"Scheduled publish failed for slot {slot}: {e}", exc_info=True)

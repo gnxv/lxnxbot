@@ -1,6 +1,7 @@
 """Poster graph: generate a ready-to-publish post about kitchen restoration."""
 import logging
 import uuid
+import re
 from pathlib import Path
 from typing import TypedDict, Optional, List
 from langgraph.graph import StateGraph, END
@@ -28,9 +29,9 @@ class PostOutput(BaseModel):
     short_topic: str = Field(description="Короткая суть в 2–4 словах")
     image_prompt: str = Field(
         description=(
-            "Короткий промпт на английском для реалистичной фотографии кухни. "
-            "Простой вид обновлённой кухни, фасадов или столешницы. "
-            "Без сюрреализма, без лишних объектов, без предметов внутри шкафов."
+            "Короткий промпт на английском для одной реалистичной фотографии кухни. "
+            "Только один кадр: обновлённая кухня, фасады или столешница. "
+            "Без before/after, без split, без comparison, без сюрреализма, без лишних объектов, без текста на картинке."
         )
     )
 
@@ -52,8 +53,8 @@ SYSTEM_POSTER = """Ты — мастер по реставрации кухон�
 - Не повторяй последние темы.
 
 Для картинки:
-- Только простой реалистичный фото готовой или обновлённой кухни / фасадов / столешницы.
-- Без сюрреализма, без лишних предметов, без объектов внутри шкафов.
+- Только одна простая реалистичная фотография готовой или обновлённой кухни / фасадов / столешницы.
+- Запрещено: before/after, split image, comparison, two kitchens, сюрреализм, лишние предметы, текст на картинке.
 """
 
 def generate_post_node(state: PosterState) -> PosterState:
@@ -110,21 +111,45 @@ def generate_post_node(state: PosterState) -> PosterState:
             "без полного демонтажа. Главное — правильная подготовка поверхности."
         )
         state["short_topic"] = "реставрация выгоднее"
-        state["image_prompt"] = "realistic photo of kitchen cabinet restoration before and after, professional lighting, modern interior"
+        state["image_prompt"] = "realistic photo of modern restored kitchen cabinets"
         state["error"] = str(e)
 
     return state
 
 def _safe_image_prompt(raw: str) -> str:
-    """Make image prompt short, realistic and safe for Flux."""
-    if not raw:
-        return "realistic photo of modern kitchen cabinets, clean lighting, no clutter"
-    # Keep it short and add strong constraints
-    base = raw.strip()[:180]
-    return (
-        f"{base}, realistic photography, modern kitchen, clean, professional lighting, "
-        "no surreal elements, no objects inside cabinets unless essential, no extra items"
-    )
+    """Make image prompt short, realistic and safe for Flux.
+    Strips common bad patterns (before/after, split, comparison) and forces a clean single-photo ending.
+    """
+    if not raw or not raw.strip():
+        return "realistic photo of modern restored kitchen cabinets, clean lighting, no clutter, no text"
+
+    text = raw.strip()
+    # Remove common bad phrases (case-insensitive)
+    bad_patterns = [
+        r"\bbefore\s*(and|&)?\s*after\b",
+        r"\bbefore\b",
+        r"\bafter\b",
+        r"\bcomparison\b",
+        r"\bsplit\s*(image|view|screen)?\b",
+        r"\btwo\s*(kitchens|images|photos)\b",
+        r"\bold\s*(kitchen|cabinets)?\b",
+        r"\bnew\s*(kitchen|cabinets)?\b",
+        r"\bsurreal\b",
+        r"\bfloating\b",
+    ]
+    for pat in bad_patterns:
+        text = re.sub(pat, "", text, flags=re.IGNORECASE)
+
+    # Clean up extra spaces/commas
+    text = re.sub(r"\s+", " ", text)
+    text = re.sub(r"\s*,\s*,", ",", text)
+    text = text.strip(" ,.")
+
+    if len(text) > 160:
+        text = text[:160].rsplit(" ", 1)[0]
+
+    suffix = ", realistic photography, single photo of modern restored kitchen, clean professional lighting, no clutter, no text, no surreal elements"
+    return (text + suffix).strip()
 
 def generate_image_node(state: PosterState) -> PosterState:
     """Generate image via OpenRouter /api/v1/images endpoint."""
