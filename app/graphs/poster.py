@@ -31,6 +31,7 @@ class PostOutput(BaseModel):
         description=(
             "Короткий промпт на английском для одной реалистичной фотографии кухни. "
             "Только один кадр: обновлённая кухня, фасады или столешница. "
+            "Предпочтительно мягкие пастельные тона (бежевый, светло-серый, мятный, шалфейный, пудровый). "
             "Без before/after, без split, без comparison, без сюрреализма, без лишних объектов, без текста на картинке."
         )
     )
@@ -40,6 +41,7 @@ SYSTEM_POSTER = """Ты — мастер по реставрации кухон�
 Пиши живые, понятные посты про реальные подходы к реставрации: что оставляем, что обновляем, как готовим и красим, какой получается результат.
 
 Один пост — одна конкретная идея или типичный сценарий работы.
+Варьируй фокус: иногда ящики и направляющие, иногда боковина, иногда столешница, иногда матовый глянец или фурнитура — но всегда в рамках одного и того же подхода.
 
 Стиль:
 - Начинай с сути: зачем это делают и в чём смысл работы (чтобы кухня снова выглядела цельно и ею было удобно пользоваться).
@@ -54,6 +56,7 @@ SYSTEM_POSTER = """Ты — мастер по реставрации кухон�
 
 Для картинки:
 - Только одна простая реалистичная фотография готовой или обновлённой кухни / фасадов / столешницы.
+- Предпочтительно мягкие пастельные тона: бежевый, светло-серый, мятный, шалфейный, пудровый, не чисто белый и не тёмно-серый.
 - Запрещено: before/after, split image, comparison, two kitchens, сюрреализм, лишние предметы, текст на картинке.
 """
 
@@ -75,7 +78,7 @@ def generate_post_node(state: PosterState) -> PosterState:
             f"{recent_text}"
         )
     else:
-        text_prompt = f"Сгенерируй один новый готовый пост про типичную реставрацию кухни. Придумай свежую конкретную тему внутри процесса или результата.{recent_text}"
+        text_prompt = f"Сгенерируй один новый готовый пост про типичную реставрацию кухни. Выбери свежий фокус (ящики, боковина, столешница, фурнитура или покрытие фасадов) и не повторяй недавние темы.{recent_text}"
 
     content_parts = [{"type": "text", "text": text_prompt}]
 
@@ -111,7 +114,7 @@ def generate_post_node(state: PosterState) -> PosterState:
             "без полного демонтажа. Главное — правильная подготовка поверхности."
         )
         state["short_topic"] = "реставрация выгоднее"
-        state["image_prompt"] = "realistic photo of modern restored kitchen cabinets"
+        state["image_prompt"] = "realistic photo of modern restored kitchen cabinets in soft pastel tones"
         state["error"] = str(e)
 
     return state
@@ -121,7 +124,7 @@ def _safe_image_prompt(raw: str) -> str:
     Strips common bad patterns (before/after, split, comparison) and forces a clean single-photo ending.
     """
     if not raw or not raw.strip():
-        return "realistic photo of modern restored kitchen cabinets, clean lighting, no clutter, no text"
+        return "realistic photo of modern restored kitchen cabinets in soft pastel tones, clean lighting, no clutter, no text"
 
     text = raw.strip()
     # Remove common bad phrases (case-insensitive)
@@ -148,7 +151,7 @@ def _safe_image_prompt(raw: str) -> str:
     if len(text) > 160:
         text = text[:160].rsplit(" ", 1)[0]
 
-    suffix = ", realistic photography, single photo of modern restored kitchen, clean professional lighting, no clutter, no text, no surreal elements"
+    suffix = ", realistic photography, single photo of modern restored kitchen in soft pastel tones, clean professional lighting, no clutter, no text, no surreal elements"
     return (text + suffix).strip()
 
 def generate_image_node(state: PosterState) -> PosterState:
@@ -157,7 +160,7 @@ def generate_image_node(state: PosterState) -> PosterState:
     import httpx
 
     image_path = settings.temp_images_dir / f"{uuid.uuid4().hex}.png"
-    raw_prompt = state.get("image_prompt") or "realistic photo of modern kitchen cabinets"
+    raw_prompt = state.get("image_prompt") or "realistic photo of modern kitchen cabinets in soft pastel tones"
     prompt = _safe_image_prompt(raw_prompt)
     logger.info(f"Poster image prompt: {prompt}")
 
