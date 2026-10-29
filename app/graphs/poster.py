@@ -33,7 +33,16 @@ def _get_color_hint() -> str:
     chosen = random.sample(PASTEL_TONES, k=k)
     return ", ".join(chosen)
 
-# Four post angles for variety. Theme 1 is the current proven style.
+# Soft image style hints per angle (not forced, just a gentle bias)
+ANGLE_IMAGE_HINTS = {
+    "process": "clean modern restored kitchen, soft pastel tones",
+    "problem_solution": "realistic kitchen showing neat updated cabinets and hardware, natural lighting",
+    "cozy_character": "warm cozy kitchen with wooden or soft natural tones, inviting and lived-in but clean, characterful",
+    "single_element": "close-up or focused view of updated kitchen cabinets, handles or countertop, soft lighting",
+    "custom": "realistic photo of modern restored kitchen",
+}
+
+# Four post angles for variety.
 POST_ANGLES = [
     {
         "name": "process",
@@ -55,11 +64,12 @@ POST_ANGLES = [
         ),
     },
     {
-        "name": "result_usability",
+        "name": "cozy_character",
         "instruction": (
-            "Напиши пост с акцентом на результат и удобство использования.\n"
-            "Можно коротко упомянуть, что сделали (обновили фасады, фурнитуру, столешницу), но основной фокус — что изменилось в ощущениях: легче открывается, выглядит собранно, ничего не выбивается, приятнее пользоваться каждый день.\n"
-            "Стиль спокойный и конкретный, без общих фраз."
+            "Напиши пост про уютную кухню с характером.\n"
+            "Фокус на тёплом дереве, мягких натуральных тонах, живом ощущении от кухни.\n"
+            "Можно коротко упомянуть, что сделали (обновили фасады, оставили дерево, подобрали спокойный цвет), но главное — как кухня стала уютнее и живее, с характером, а не просто «как у всех».\n"
+            "Без сказочности и без прямой фэнтези — просто уютная реальная кухня, которой приятно пользоваться."
         ),
     },
     {
@@ -85,6 +95,7 @@ class PosterState(TypedDict):
     draft_id: Optional[int]
     error: Optional[str]
     short_topic: Optional[str]
+    angle_name: Optional[str]
 
 class PostOutput(BaseModel):
     """Structured output for a channel post."""
@@ -94,7 +105,6 @@ class PostOutput(BaseModel):
         description=(
             "Короткий промпт на английском для одной реалистичной фотографии кухни. "
             "Только один кадр: обновлённая кухня, фасады или столешница. "
-            "Мягкие пастельные тона, варьируй цвет. "
             "Без before/after, без split, без comparison, без сюрреализма, без лишних объектов, без текста на картинке."
         )
     )
@@ -116,7 +126,6 @@ SYSTEM_POSTER = """Ты — мастер по реставрации кухон�
 
 Для картинки:
 - Только одна простая реалистичная фотография готовой или обновлённой кухни / фасадов / столешницы.
-- Мягкие пастельные тона, варьируй цвет (тёплые и холодные).
 - Запрещено: before/after, split image, comparison, two kitchens, сюрреализм, лишние предметы, текст на картинке.
 """
 
@@ -145,6 +154,8 @@ def generate_post_node(state: PosterState) -> PosterState:
             f"{angle['instruction']}\n\n"
             f"Сгенерируй один новый готовый пост в этом ключе. Не повторяй недавние темы.{recent_text}"
         )
+
+    state["angle_name"] = angle_name
 
     content_parts = [{"type": "text", "text": text_prompt}]
 
@@ -180,18 +191,19 @@ def generate_post_node(state: PosterState) -> PosterState:
             "без полного демонтажа. Главное — правильная подготовка поверхности."
         )
         state["short_topic"] = "реставрация выгоднее"
-        state["image_prompt"] = "realistic photo of modern restored kitchen cabinets in soft pastel tones"
+        state["image_prompt"] = "realistic photo of modern restored kitchen cabinets"
         state["error"] = str(e)
 
     return state
 
-def _safe_image_prompt(raw: str) -> str:
+def _safe_image_prompt(raw: str, angle_name: str = "process") -> str:
     """Make image prompt short, realistic and safe for Flux.
-    Strips common bad patterns and adds a random pastel color hint.
+    Soft style hint depends on the chosen angle.
     """
+    hint = ANGLE_IMAGE_HINTS.get(angle_name, ANGLE_IMAGE_HINTS["process"])
+
     if not raw or not raw.strip():
-        color = _get_color_hint()
-        return f"realistic photo of modern restored kitchen cabinets in soft pastel tones ({color}), clean lighting, no clutter, no text"
+        return f"realistic photo of {hint}, clean lighting, no clutter, no text"
 
     text = raw.strip()
     bad_patterns = [
@@ -216,8 +228,7 @@ def _safe_image_prompt(raw: str) -> str:
     if len(text) > 160:
         text = text[:160].rsplit(" ", 1)[0]
 
-    color = _get_color_hint()
-    suffix = f", realistic photography, single photo of modern restored kitchen in soft pastel tones ({color}), clean professional lighting, no clutter, no text, no surreal elements"
+    suffix = f", realistic photography, single photo, {hint}, clean professional lighting, no clutter, no text, no surreal elements"
     return (text + suffix).strip()
 
 def generate_image_node(state: PosterState) -> PosterState:
@@ -226,9 +237,10 @@ def generate_image_node(state: PosterState) -> PosterState:
     import httpx
 
     image_path = settings.temp_images_dir / f"{uuid.uuid4().hex}.png"
-    raw_prompt = state.get("image_prompt") or "realistic photo of modern kitchen cabinets in soft pastel tones"
-    prompt = _safe_image_prompt(raw_prompt)
-    logger.info(f"Poster image prompt: {prompt}")
+    raw_prompt = state.get("image_prompt") or "realistic photo of modern kitchen cabinets"
+    angle_name = state.get("angle_name") or "process"
+    prompt = _safe_image_prompt(raw_prompt, angle_name)
+    logger.info(f"Poster image prompt (angle={angle_name}): {prompt}")
 
     try:
         resp = httpx.post(
