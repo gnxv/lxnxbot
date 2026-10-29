@@ -2,6 +2,7 @@
 import logging
 import uuid
 import re
+import random
 from pathlib import Path
 from typing import TypedDict, Optional, List
 from langgraph.graph import StateGraph, END
@@ -12,6 +13,25 @@ from app.db import save_draft, get_recent_posts
 from app.config import settings
 
 logger = logging.getLogger(__name__)
+
+PASTEL_TONES = [
+    "warm beige",
+    "light gray",
+    "soft sage",
+    "powder pink",
+    "warm white",
+    "muted blue-gray",
+    "soft cream",
+    "pale olive",
+    "dusty rose",
+    "light taupe",
+]
+
+def _get_color_hint() -> str:
+    """Pick 1 or 2 random pastel tones for variety."""
+    k = random.choice([1, 2])
+    chosen = random.sample(PASTEL_TONES, k=k)
+    return ", ".join(chosen)
 
 class PosterState(TypedDict):
     topic: str
@@ -31,7 +51,7 @@ class PostOutput(BaseModel):
         description=(
             "Короткий промпт на английском для одной реалистичной фотографии кухни. "
             "Только один кадр: обновлённая кухня, фасады или столешница. "
-            "Предпочтительно мягкие пастельные тона (бежевый, светло-серый, мятный, шалфейный, пудровый). "
+            "Мягкие пастельные тона, варьируй цвет. "
             "Без before/after, без split, без comparison, без сюрреализма, без лишних объектов, без текста на картинке."
         )
     )
@@ -56,7 +76,7 @@ SYSTEM_POSTER = """Ты — мастер по реставрации кухон�
 
 Для картинки:
 - Только одна простая реалистичная фотография готовой или обновлённой кухни / фасадов / столешницы.
-- Предпочтительно мягкие пастельные тона: бежевый, светло-серый, мятный, шалфейный, пудровый, не чисто белый и не тёмно-серый.
+- Мягкие пастельные тона, варьируй цвет (тёплые и холодные).
 - Запрещено: before/after, split image, comparison, two kitchens, сюрреализм, лишние предметы, текст на картинке.
 """
 
@@ -121,13 +141,13 @@ def generate_post_node(state: PosterState) -> PosterState:
 
 def _safe_image_prompt(raw: str) -> str:
     """Make image prompt short, realistic and safe for Flux.
-    Strips common bad patterns (before/after, split, comparison) and forces a clean single-photo ending.
+    Strips common bad patterns and adds a random pastel color hint.
     """
     if not raw or not raw.strip():
-        return "realistic photo of modern restored kitchen cabinets in soft pastel tones, clean lighting, no clutter, no text"
+        color = _get_color_hint()
+        return f"realistic photo of modern restored kitchen cabinets in soft pastel tones ({color}), clean lighting, no clutter, no text"
 
     text = raw.strip()
-    # Remove common bad phrases (case-insensitive)
     bad_patterns = [
         r"\bbefore\s*(and|&)?\s*after\b",
         r"\bbefore\b",
@@ -143,7 +163,6 @@ def _safe_image_prompt(raw: str) -> str:
     for pat in bad_patterns:
         text = re.sub(pat, "", text, flags=re.IGNORECASE)
 
-    # Clean up extra spaces/commas
     text = re.sub(r"\s+", " ", text)
     text = re.sub(r"\s*,\s*,", ",", text)
     text = text.strip(" ,.")
@@ -151,7 +170,8 @@ def _safe_image_prompt(raw: str) -> str:
     if len(text) > 160:
         text = text[:160].rsplit(" ", 1)[0]
 
-    suffix = ", realistic photography, single photo of modern restored kitchen in soft pastel tones, clean professional lighting, no clutter, no text, no surreal elements"
+    color = _get_color_hint()
+    suffix = f", realistic photography, single photo of modern restored kitchen in soft pastel tones ({color}), clean professional lighting, no clutter, no text, no surreal elements"
     return (text + suffix).strip()
 
 def generate_image_node(state: PosterState) -> PosterState:

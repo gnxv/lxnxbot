@@ -5,6 +5,8 @@ Uses structured output.
 import logging
 import uuid
 import base64
+import random
+import re
 from pathlib import Path
 from typing import TypedDict, Optional, List
 from langgraph.graph import StateGraph, END
@@ -16,6 +18,50 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
+PASTEL_TONES = [
+    "warm beige",
+    "light gray",
+    "soft sage",
+    "powder pink",
+    "warm white",
+    "muted blue-gray",
+    "soft cream",
+    "pale olive",
+    "dusty rose",
+    "light taupe",
+]
+
+def _get_color_hint() -> str:
+    k = random.choice([1, 2])
+    chosen = random.sample(PASTEL_TONES, k=k)
+    return ", ".join(chosen)
+
+def _safe_image_prompt(raw: str) -> str:
+    if not raw or not raw.strip():
+        color = _get_color_hint()
+        return f"realistic photo of modern restored kitchen in soft pastel tones ({color}), clean lighting, no clutter, no text"
+
+    text = raw.strip()
+    bad_patterns = [
+        r"\bbefore\s*(and|&)?\s*after\b",
+        r"\bbefore\b",
+        r"\bafter\b",
+        r"\bcomparison\b",
+        r"\bsplit\s*(image|view|screen)?\b",
+        r"\btwo\s*(kitchens|images|photos)\b",
+        r"\bsurreal\b",
+    ]
+    for pat in bad_patterns:
+        text = re.sub(pat, "", text, flags=re.IGNORECASE)
+
+    text = re.sub(r"\s+", " ", text).strip(" ,.")
+    if len(text) > 160:
+        text = text[:160].rsplit(" ", 1)[0]
+
+    color = _get_color_hint()
+    suffix = f", realistic photography, single photo of modern restored kitchen in soft pastel tones ({color}), clean professional lighting, no clutter, no text"
+    return (text + suffix).strip()
+
 class CustomPosterState(TypedDict):
     topic: str
     text: Optional[str]
@@ -26,8 +72,8 @@ class CustomPosterState(TypedDict):
     error: Optional[str]
 
 class CustomPostOutput(BaseModel):
-    post_text: str = Field(description="Готовый текст поста на русском, 350-650 символов, фокус на результате работы")
-    image_prompt: Optional[str] = Field(default=None, description="Промпт на английском для картинки, только если нет фото пользователя")
+    post_text: str = Field(description="Готовый текст поста на русском, 450-650 символов, фокус на результате работы")
+    image_prompt: Optional[str] = Field(default=None, description="Промпт на английском для картинки, только если нет фото пользователя. Мягкие пастельные тона.")
 
 SYSTEM_CUSTOM = """Ты — мастер по реставрации кухонь, который ведёт Telegram-канал.
 
@@ -40,11 +86,11 @@ SYSTEM_CUSTOM = """Ты — мастер по реставрации кухон�
 - Можно упомянуть материалы, цвет, практичность, внешний вид, если это важно для результата.
 - Не выдумывай цены, сроки и проблемы, которых нет в комментарии и на фото.
 - Стиль: простой, уверенный, без пафоса и без литературщины. Короткие абзацы.
-- Длина 350–650 символов.
-- Эмодзи почти не используй (0–1).
+- Длина 450–650 символов.
+- Эмодзи используй только если усиливают смысл, а не как украшательство (0–2).
 - Не заканчивай формальным вопросом. Можно мягко намекнуть, что делаете такие работы.
 
-Если фото нет — напиши пост на заданную тему и дай хороший IMAGE_PROMPT на английском для реалистичной картинки.
+Если фото нет — напиши пост на заданную тему и дай хороший IMAGE_PROMPT на английском для реалистичной картинки в мягких пастельных тонах.
 """
 
 def generate_custom_node(state: CustomPosterState) -> CustomPosterState:
@@ -99,11 +145,13 @@ def maybe_generate_image_node(state: CustomPosterState) -> CustomPosterState:
 
     import httpx
     image_path = settings.temp_images_dir / f"custom_{uuid.uuid4().hex}.png"
+    prompt = _safe_image_prompt(state["image_prompt"])
+    logger.info(f"CustomPoster image prompt: {prompt}")
     try:
         resp = httpx.post(
             "https://openrouter.ai/api/v1/images",
             headers={"Authorization": f"Bearer {settings.openrouter_api_key}", "Content-Type": "application/json"},
-            json={"model": settings.model_image, "prompt": state["image_prompt"], "aspect_ratio": "1:1"},
+            json={"model": settings.model_image, "prompt": prompt, "aspect_ratio": "1:1"},
             timeout=120.0,
         )
         resp.raise_for_status()
