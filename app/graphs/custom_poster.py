@@ -5,7 +5,6 @@ Uses structured output.
 import logging
 import uuid
 import base64
-import random
 import re
 from pathlib import Path
 from typing import TypedDict, Optional, List
@@ -18,28 +17,12 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
-PASTEL_TONES = [
-    "warm beige",
-    "light gray",
-    "soft sage",
-    "powder pink",
-    "warm white",
-    "muted blue-gray",
-    "soft cream",
-    "pale olive",
-    "dusty rose",
-    "light taupe",
-]
-
-def _get_color_hint() -> str:
-    k = random.choice([1, 2])
-    chosen = random.sample(PASTEL_TONES, k=k)
-    return ", ".join(chosen)
-
 def _safe_image_prompt(raw: str) -> str:
+    """Clean image prompt: remove bad patterns, keep realistic single photo.
+    Do not force color palette — topic can be anything (wood, high-tech, etc.).
+    """
     if not raw or not raw.strip():
-        color = _get_color_hint()
-        return f"realistic photo of modern restored kitchen in soft pastel tones ({color}), clean lighting, no clutter, no text"
+        return "realistic photo of modern kitchen, clean lighting, no clutter, no text"
 
     text = raw.strip()
     bad_patterns = [
@@ -55,11 +38,10 @@ def _safe_image_prompt(raw: str) -> str:
         text = re.sub(pat, "", text, flags=re.IGNORECASE)
 
     text = re.sub(r"\s+", " ", text).strip(" ,.")
-    if len(text) > 160:
-        text = text[:160].rsplit(" ", 1)[0]
+    if len(text) > 180:
+        text = text[:180].rsplit(" ", 1)[0]
 
-    color = _get_color_hint()
-    suffix = f", realistic photography, single photo of modern restored kitchen in soft pastel tones ({color}), clean professional lighting, no clutter, no text"
+    suffix = ", realistic photography, single photo, clean professional lighting, no clutter, no text, no surreal elements"
     return (text + suffix).strip()
 
 class CustomPosterState(TypedDict):
@@ -73,7 +55,7 @@ class CustomPosterState(TypedDict):
 
 class CustomPostOutput(BaseModel):
     post_text: str = Field(description="Готовый текст поста на русском, 450-650 символов, фокус на результате работы")
-    image_prompt: Optional[str] = Field(default=None, description="Промпт на английском для картинки, только если нет фото пользователя. Мягкие пастельные тона.")
+    image_prompt: Optional[str] = Field(default=None, description="Промпт на английском для картинки, только если нет фото пользователя. Стиль и цвет под тему.")
 
 SYSTEM_CUSTOM = """Ты — мастер по реставрации кухонь, который ведёт Telegram-канал.
 
@@ -90,7 +72,7 @@ SYSTEM_CUSTOM = """Ты — мастер по реставрации кухон�
 - Эмодзи используй только если усиливают смысл, а не как украшательство (0–2).
 - Не заканчивай формальным вопросом. Можно мягко намекнуть, что делаете такие работы.
 
-Если фото нет — напиши пост на заданную тему и дай хороший IMAGE_PROMPT на английском для реалистичной картинки в мягких пастельных тонах.
+Если фото нет — напиши пост на заданную тему и дай хороший IMAGE_PROMPT на английском для реалистичной картинки, которая соответствует теме (стиль, материал, цвет — как подходит).
 """
 
 def generate_custom_node(state: CustomPosterState) -> CustomPosterState:
