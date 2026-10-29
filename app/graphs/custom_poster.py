@@ -1,5 +1,6 @@
 """Custom Poster: for posts with user photos and/or explicit work description.
 No memory of previous posts. Strictly follows the request and looks at images.
+Uses structured output.
 """
 import logging
 import uuid
@@ -8,6 +9,7 @@ from pathlib import Path
 from typing import TypedDict, Optional, List
 from langgraph.graph import StateGraph, END
 from langchain_core.messages import HumanMessage, SystemMessage
+from pydantic import BaseModel, Field
 from app.llm import get_poster_llm
 from app.db import save_draft
 from app.config import settings
@@ -15,13 +17,17 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 
 class CustomPosterState(TypedDict):
-    topic: str                  # user's description / request
+    topic: str
     text: Optional[str]
     image_prompt: Optional[str]
-    image_path: Optional[str]   # generated image (if needed)
-    image_paths: Optional[List[str]]  # user photos
+    image_path: Optional[str]
+    image_paths: Optional[List[str]]
     draft_id: Optional[int]
     error: Optional[str]
+
+class CustomPostOutput(BaseModel):
+    post_text: str = Field(description="Готовый текст поста на русском, 350-650 символов, фокус на результате работы")
+    image_prompt: Optional[str] = Field(default=None, description="Промпт на английском для картинки, только если нет фото пользователя")
 
 SYSTEM_CUSTOM = """Ты — мастер по реставрации кухонь, который ведёт Telegram-канал.
 
@@ -39,17 +45,10 @@ SYSTEM_CUSTOM = """Ты — мастер по реставрации кухон�
 - Не заканчивай формальным вопросом. Можно мягко намекнуть, что делаете такие работы.
 
 Если фото нет — напиши пост на заданную тему и дай хороший IMAGE_PROMPT на английском для реалистичной картинки.
-
-Формат ответа строго:
-POST:
-<готовый текст поста>
-
-IMAGE_PROMPT:
-<промпт на английском или пусто, если есть фото пользователя>
 """
 
 def generate_custom_node(state: CustomPosterState) -> CustomPosterState:
-    llm = get_poster_llm()
+    llm = get_poster_llm().with_structured_output(CustomPostOutput)
     topic = state.get("topic") or "наша новая работа"
     image_paths = state.get("image_paths") or []
 
@@ -57,12 +56,12 @@ def generate_custom_node(state: CustomPosterState) -> CustomPosterState:
         user_text = (
             f"Комментарий заказчика: {topic}\n\n"
             "Напиши пост про эту работу. Фокусируйся на том, что сделали и какой результат получился. "
-            "Не описывай всё, что видно на фото. IMAGE_PROMPT оставь пустым."
+            "Не описывай всё, что видно на фото. image_prompt оставь пустым."
         )
     else:
         user_text = (
             f"Тема поста: {topic}\n\n"
-            "Фотографий нет. Напиши пост на эту тему и дай IMAGE_PROMPT для генерации подходящей картинки."
+            "Фотографий нет. Напиши пост на эту тему и дай image_prompt для генерации подходящей картинки."
         )
 
     content_parts = [{"type": "text", "text": user_text}]
@@ -75,38 +74,24 @@ def generate_custom_node(state: CustomPosterState) -> CustomPosterState:
                 "image_url": {"url": f"data:image/jpeg;base64,{b64}"}
             })
 
-    resp = llm.invoke([
-        SystemMessage(content=SYSTEM_CUSTOM),
-        HumanMessage(content=content_parts if len(content_parts) > 1 else user_text)
-    ])
-    content = resp.content.strip()
+    try:
+        result: CustomPostOutput = llm.invoke([
+            SystemMessage(content=SYSTEM_CUSTOM),
+            HumanMessage(content=content_parts if len(content_parts) > 1 else user_text)
+        ])
+        state["text"] = result.post_text
+        state["image_prompt"] = result.image_prompt if not image_paths else None
+        logger.info(f"CustomPoster: generated, length={len(result.post_text or '')}, photos={len(image_paths)}")
+    except Exception as e:
+        logger.error(f"CustomPoster structured generation failed: {e}")
+        state["text"] = f"Выполнили работу: {topic}. Результат получился аккуратным и практичным."
+        state["image_prompt"] = None
+        state["error"] = str(e)
 
-    text = None
-    image_prompt = None
-    if "POST:" in content:
-        try:
-            post_part = content.split("POST:")[1].split("IMAGE_PROMPT:")[0].strip()
-            if post_part:
-                text = post_part
-            if "IMAGE_PROMPT:" in content:
-                img = content.split("IMAGE_PROMPT:")[1].strip()
-                if img and not image_paths:
-                    image_prompt = img
-        except Exception:
-            pass
-
-    if not text:
-        text = content.replace("POST:", "").replace("IMAGE_PROMPT:", "").strip()
-
-    state["text"] = text
-    state["image_prompt"] = image_prompt
-    logger.info(f"CustomPoster: generated, length={len(text or '')}, photos={len(image_paths)}")
     return state
 
 def maybe_generate_image_node(state: CustomPosterState) -> CustomPosterState:
-    """Generate image only if no user photos and we have an image_prompt."""
     if state.get("image_paths"):
-        # User provided photos — don't generate
         state["image_path"] = None
         return state
     if not state.get("image_prompt"):
@@ -133,7 +118,6 @@ def maybe_generate_image_node(state: CustomPosterState) -> CustomPosterState:
 
 def save_node(state: CustomPosterState) -> CustomPosterState:
     if state.get("text"):
-        # For custom we don't always need a draft, but save for consistency
         did = save_draft(state["text"], state.get("image_path"))
         state["draft_id"] = did
     return state

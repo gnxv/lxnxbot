@@ -2,9 +2,10 @@
 import logging
 import uuid
 from pathlib import Path
-from typing import TypedDict, Optional
+from typing import TypedDict, Optional, List
 from langgraph.graph import StateGraph, END
 from langchain_core.messages import HumanMessage, SystemMessage
+from pydantic import BaseModel, Field
 from app.llm import get_poster_llm
 from app.db import save_draft, get_recent_posts
 from app.config import settings
@@ -16,9 +17,16 @@ class PosterState(TypedDict):
     text: Optional[str]
     image_prompt: Optional[str]
     image_path: Optional[str]
-    image_paths: Optional[list]  # user-provided photos for vision
+    image_paths: Optional[list]
     draft_id: Optional[int]
     error: Optional[str]
+    short_topic: Optional[str]
+
+class PostOutput(BaseModel):
+    """Structured output for a channel post."""
+    post_text: str = Field(description="Готовый текст поста на русском, 400-700 символов, живой тон, без продажи")
+    short_topic: str = Field(description="Короткая суть в 2-4 словах, например 'провисшая петля'")
+    image_prompt: str = Field(description="Детальный промпт на английском для реалистичной фотографии по теме поста")
 
 SYSTEM_POSTER = """Ты ведёшь Telegram-канал «РЕСТАВРАТОР» — интересный блог про кухни, ремонт, интерьер и бытовые ситуации.
 
@@ -54,20 +62,10 @@ SYSTEM_POSTER = """Ты ведёшь Telegram-канал «РЕСТАВРАТО�
 - В конце не задавай формальных вопросов и не делай прямой продажи.
 - Не повторяй темы из последних постов.
 - Если есть фото — не описывай всё подряд. Выделяй главное по теме.
-
-Формат ответа строго:
-POST:
-<готовый текст поста>
-
-TOPIC:
-<2-3 слова — суть поста, например "провисшая петля" или "плёнка или эмаль">
-
-IMAGE_PROMPT:
-<детальный промпт на английском для реалистичной фотографии именно по теме поста>
 """
 
 def generate_post_node(state: PosterState) -> PosterState:
-    llm = get_poster_llm()
+    llm = get_poster_llm().with_structured_output(PostOutput)
     recent = get_recent_posts(12)
     recent_text = ""
     if recent:
@@ -76,8 +74,6 @@ def generate_post_node(state: PosterState) -> PosterState:
     custom_topic = state.get("topic")
     image_paths = state.get("image_paths") or []
 
-    # Build multimodal content if photos are provided
-    content_parts = []
     if custom_topic and custom_topic.lower() not in ("реставрация кухонь", "кухни", ""):
         text_prompt = (
             f"Напиши пост строго на тему: «{custom_topic}».\n"
@@ -88,10 +84,9 @@ def generate_post_node(state: PosterState) -> PosterState:
     else:
         text_prompt = f"Сгенерируй один новый готовый пост. Придумай свежую тему внутри одной из рубрик.{recent_text}"
 
-    content_parts.append({"type": "text", "text": text_prompt})
+    content_parts = [{"type": "text", "text": text_prompt}]
 
-    # Attach images if any (vision)
-    for p in image_paths[:8]:  # limit to 8
+    for p in image_paths[:8]:
         if Path(p).exists():
             import base64
             b64 = base64.b64encode(Path(p).read_bytes()).decode()
@@ -100,64 +95,38 @@ def generate_post_node(state: PosterState) -> PosterState:
                 "image_url": {"url": f"data:image/jpeg;base64,{b64}"}
             })
 
-    if len(content_parts) > 1:
-        # Multimodal
-        resp = llm.invoke([SystemMessage(content=SYSTEM_POSTER), HumanMessage(content=content_parts)])
-    else:
-        resp = llm.invoke([SystemMessage(content=SYSTEM_POSTER), HumanMessage(content=text_prompt)])
+    try:
+        if len(content_parts) > 1:
+            result: PostOutput = llm.invoke([
+                SystemMessage(content=SYSTEM_POSTER),
+                HumanMessage(content=content_parts)
+            ])
+        else:
+            result: PostOutput = llm.invoke([
+                SystemMessage(content=SYSTEM_POSTER),
+                HumanMessage(content=text_prompt)
+            ])
+        state["text"] = result.post_text
+        state["short_topic"] = result.short_topic
+        state["image_prompt"] = result.image_prompt
+        logger.info(f"Poster: post generated, length={len(result.post_text)}, topic={result.short_topic}")
+    except Exception as e:
+        logger.error(f"Poster structured generation failed: {e}")
+        state["text"] = (
+            "Реставрация кухни часто обходится в 3–5 раз дешевле новой. "
+            "Покраска фасадов, замена фурнитуры и столешницы дают эффект «как новая» "
+            "без полного демонтажа. Главное — правильная подготовка поверхности."
+        )
+        state["short_topic"] = "реставрация выгоднее"
+        state["image_prompt"] = "realistic photo of kitchen cabinet restoration before and after, professional lighting, modern interior"
+        state["error"] = str(e)
 
-    content = resp.content.strip()
-
-    text = None
-    image_prompt = "realistic photo of kitchen cabinet restoration before and after, professional lighting, modern interior"
-    short_topic = None
-
-    if "POST:" in content:
-        try:
-            after_post = content.split("POST:")[1]
-            # Extract TOPIC if present
-            if "TOPIC:" in after_post:
-                post_part = after_post.split("TOPIC:")[0].strip()
-                topic_part = after_post.split("TOPIC:")[1]
-                if "IMAGE_PROMPT:" in topic_part:
-                    short_topic = topic_part.split("IMAGE_PROMPT:")[0].strip()
-                    image_prompt = topic_part.split("IMAGE_PROMPT:")[1].strip() or image_prompt
-                else:
-                    short_topic = topic_part.strip()
-                text = post_part
-            elif "IMAGE_PROMPT:" in after_post:
-                text = after_post.split("IMAGE_PROMPT:")[0].strip()
-                image_prompt = after_post.split("IMAGE_PROMPT:")[1].strip() or image_prompt
-            else:
-                text = after_post.strip()
-        except Exception:
-            pass
-
-    if not text:
-        text = content.replace("POST:", "").replace("TOPIC:", "").replace("IMAGE_PROMPT:", "").strip()
-        if len(text) < 50:
-            text = (
-                "Реставрация кухни часто обходится в 3–5 раз дешевле новой. "
-                "Покраска фасадов, замена фурнитуры и столешницы дают эффект «как новая» "
-                "без полного демонтажа. Главное — правильная подготовка поверхности."
-            )
-
-    # Fallback short topic from first words if model didn't give one
-    if not short_topic and text:
-        words = text.replace("\n", " ").split()
-        short_topic = " ".join(words[:4]).rstrip(".,:")
-
-    state["text"] = text
-    state["image_prompt"] = image_prompt
-    state["short_topic"] = short_topic
-    logger.info(f"Poster: post generated, length={len(text)}, topic={short_topic}")
     return state
 
 def generate_image_node(state: PosterState) -> PosterState:
     """Generate image via OpenRouter /api/v1/images endpoint."""
     import base64
     import httpx
-    from app.config import settings
 
     image_path = settings.temp_images_dir / f"{uuid.uuid4().hex}.png"
     prompt = state.get("image_prompt") or "realistic photo of kitchen cabinet restoration before and after, professional lighting"
@@ -185,7 +154,6 @@ def generate_image_node(state: PosterState) -> PosterState:
         logger.info(f"Poster: real image saved to {image_path}")
     except Exception as e:
         logger.error(f"OpenRouter image generation failed: {e}")
-        # fallback to placeholder
         try:
             from PIL import Image, ImageDraw
             img = Image.new("RGB", (1024, 1024), color=(245, 245, 245))
@@ -206,8 +174,6 @@ def save_draft_node(state: PosterState) -> PosterState:
         return state
     draft_id = save_draft(state["text"], state.get("image_path"))
     state["draft_id"] = draft_id
-    # Stash short topic on the draft object via a side channel isn't easy;
-    # we'll recover it from the result in the caller when possible.
     logger.info(f"Poster: draft saved id={draft_id}, topic={state.get('short_topic')}")
     return state
 

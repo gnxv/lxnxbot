@@ -1,11 +1,27 @@
 import logging
 from contextlib import contextmanager
-from typing import Any, Optional
+from typing import Any, Optional, List
+from datetime import date, time as dtime
 import psycopg
 from psycopg.rows import dict_row
+from psycopg_pool import ConnectionPool
 from app.config import settings
 
 logger = logging.getLogger(__name__)
+
+# Connection pool (min 1, max 10)
+_pool: Optional[ConnectionPool] = None
+
+def get_pool() -> ConnectionPool:
+    global _pool
+    if _pool is None:
+        _pool = ConnectionPool(
+            settings.database_url,
+            min_size=1,
+            max_size=10,
+            kwargs={"row_factory": dict_row},
+        )
+    return _pool
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS schedule (
@@ -38,62 +54,44 @@ CREATE TABLE IF NOT EXISTS extra_posts (
     run_at TIMESTAMPTZ NOT NULL,
     text TEXT,
     topic TEXT,
-    image_paths TEXT[],  -- array of local paths
-    status TEXT NOT NULL DEFAULT 'pending',  -- pending / published / cancelled
+    image_paths TEXT[],
+    status TEXT NOT NULL DEFAULT 'pending',
     created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Track which schedule slots were already published on a given date (MSK)
+CREATE TABLE IF NOT EXISTS published_slots (
+    slot_date DATE NOT NULL,
+    time_slot TIME NOT NULL,
+    published_at TIMESTAMPTZ DEFAULT NOW(),
+    PRIMARY KEY (slot_date, time_slot)
+);
+
+-- Simple key-value store for pending manager confirms (survives restarts)
+CREATE TABLE IF NOT EXISTS pending_confirms (
+    key TEXT PRIMARY KEY,
+    data JSONB NOT NULL,
+    updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 """
 
-def get_pending_extras():
-    with db() as conn:
-        cur = conn.execute(
-            "SELECT * FROM extra_posts WHERE status = 'pending' AND run_at <= NOW() ORDER BY run_at"
-        )
-        return cur.fetchall()
-
-def get_upcoming_extras():
-    with db() as conn:
-        cur = conn.execute(
-            "SELECT * FROM extra_posts WHERE status = 'pending' AND run_at > NOW() ORDER BY run_at"
-        )
-        return cur.fetchall()
-
-def save_extra_post(run_at, text=None, topic=None, image_paths=None):
-    with db() as conn:
-        cur = conn.execute(
-            """INSERT INTO extra_posts (run_at, text, topic, image_paths)
-               VALUES (%s, %s, %s, %s) RETURNING id""",
-            (run_at, text, topic, image_paths or [])
-        )
-        return cur.fetchone()["id"]
-
-def cancel_extra(extra_id: int):
-    with db() as conn:
-        conn.execute("UPDATE extra_posts SET status = 'cancelled' WHERE id = %s", (extra_id,))
-
-def mark_extra_published(extra_id: int):
-    with db() as conn:
-        conn.execute("UPDATE extra_posts SET status = 'published' WHERE id = %s", (extra_id,))
-
-def get_conn():
-    return psycopg.connect(settings.database_url, row_factory=dict_row)
-
 @contextmanager
 def db():
-    conn = get_conn()
-    try:
-        yield conn
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        conn.close()
+    pool = get_pool()
+    with pool.connection() as conn:
+        try:
+            yield conn
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
 
 def init_db():
     with db() as conn:
         conn.execute(SCHEMA)
-        # Insert default schedule only if table is completely empty
+        # Ensure topic column
+        conn.execute("ALTER TABLE posts ADD COLUMN IF NOT EXISTS topic TEXT")
+        # Default schedule
         cur = conn.execute("SELECT COUNT(*) AS cnt FROM schedule")
         if cur.fetchone()["cnt"] == 0:
             conn.execute("INSERT INTO schedule (time_slot) VALUES ('10:00'), ('18:00')")
@@ -135,19 +133,82 @@ def update_draft_status(draft_id: int, status: str):
 
 def save_post(draft_id: int, message_id: int, text: str, topic: str = None):
     with db() as conn:
-        # Ensure topic column exists (safe for existing DBs)
-        conn.execute("ALTER TABLE posts ADD COLUMN IF NOT EXISTS topic TEXT")
         conn.execute(
             "INSERT INTO posts (draft_id, telegram_message_id, text, topic) VALUES (%s, %s, %s, %s)",
             (draft_id, message_id, text, topic)
         )
 
 def get_recent_posts(limit: int = 12) -> list:
-    """Return short topics of the last N published posts (newest first)."""
     with db() as conn:
-        conn.execute("ALTER TABLE posts ADD COLUMN IF NOT EXISTS topic TEXT")
         cur = conn.execute(
             "SELECT COALESCE(topic, LEFT(text, 40)) AS topic FROM posts ORDER BY published_at DESC LIMIT %s",
             (limit,)
         )
         return [row["topic"] for row in cur.fetchall() if row["topic"]]
+
+def get_pending_extras():
+    with db() as conn:
+        cur = conn.execute(
+            "SELECT * FROM extra_posts WHERE status = 'pending' AND run_at <= NOW() ORDER BY run_at"
+        )
+        return cur.fetchall()
+
+def get_upcoming_extras():
+    with db() as conn:
+        cur = conn.execute(
+            "SELECT * FROM extra_posts WHERE status = 'pending' AND run_at > NOW() ORDER BY run_at"
+        )
+        return cur.fetchall()
+
+def save_extra_post(run_at, text=None, topic=None, image_paths=None):
+    with db() as conn:
+        cur = conn.execute(
+            """INSERT INTO extra_posts (run_at, text, topic, image_paths)
+               VALUES (%s, %s, %s, %s) RETURNING id""",
+            (run_at, text, topic, image_paths or [])
+        )
+        return cur.fetchone()["id"]
+
+def cancel_extra(extra_id: int):
+    with db() as conn:
+        conn.execute("UPDATE extra_posts SET status = 'cancelled' WHERE id = %s", (extra_id,))
+
+def mark_extra_published(extra_id: int):
+    with db() as conn:
+        conn.execute("UPDATE extra_posts SET status = 'published' WHERE id = %s", (extra_id,))
+
+# --- Published slots tracking (survives restarts) ---
+def is_slot_published(slot_date: date, slot: dtime) -> bool:
+    with db() as conn:
+        cur = conn.execute(
+            "SELECT 1 FROM published_slots WHERE slot_date = %s AND time_slot = %s",
+            (slot_date, slot)
+        )
+        return cur.fetchone() is not None
+
+def mark_slot_published(slot_date: date, slot: dtime):
+    with db() as conn:
+        conn.execute(
+            """INSERT INTO published_slots (slot_date, time_slot)
+               VALUES (%s, %s) ON CONFLICT DO NOTHING""",
+            (slot_date, slot)
+        )
+
+# --- Pending confirms (simple JSON store) ---
+def get_pending_confirm(key: str = "manager") -> Optional[dict]:
+    with db() as conn:
+        cur = conn.execute("SELECT data FROM pending_confirms WHERE key = %s", (key,))
+        row = cur.fetchone()
+        return row["data"] if row else None
+
+def set_pending_confirm(data: Optional[dict], key: str = "manager"):
+    with db() as conn:
+        if data is None:
+            conn.execute("DELETE FROM pending_confirms WHERE key = %s", (key,))
+        else:
+            conn.execute(
+                """INSERT INTO pending_confirms (key, data, updated_at)
+                   VALUES (%s, %s, NOW())
+                   ON CONFLICT (key) DO UPDATE SET data = EXCLUDED.data, updated_at = NOW()""",
+                (key, data)
+            )

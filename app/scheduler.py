@@ -1,11 +1,17 @@
-"""Reliable scheduler: polls DB every 30s and auto-publishes when a slot is due (MSK)."""
+"""Reliable scheduler: polls DB every 30s and auto-publishes when a slot is due (MSK).
+Published slots are tracked in the database so restarts don't cause double posts.
+"""
 import logging
-from datetime import datetime, time as dtime
+from datetime import datetime, time as dtime, date
 from zoneinfo import ZoneInfo
 from pathlib import Path
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
-from app.db import get_schedule, update_draft_status, save_post, get_pending_extras, mark_extra_published
+from app.db import (
+    get_schedule, update_draft_status, save_post,
+    get_pending_extras, mark_extra_published,
+    is_slot_published, mark_slot_published
+)
 from app.graphs.poster import poster_graph
 from app.graphs.custom_poster import custom_poster_graph
 from app.config import settings
@@ -16,16 +22,14 @@ logger = logging.getLogger(__name__)
 
 MSK = ZoneInfo("Europe/Moscow")
 scheduler = AsyncIOScheduler(timezone=MSK)
-# Track which slots we already published today: "YYYY-MM-DD_HH:MM"
-_published_today: set[str] = set()
 
 def _already_published(slot: dtime) -> bool:
-    key = f"{datetime.now(MSK).strftime('%Y-%m-%d')}_{slot.hour:02d}:{slot.minute:02d}"
-    return key in _published_today
+    today = datetime.now(MSK).date()
+    return is_slot_published(today, slot)
 
 def _mark_published(slot: dtime):
-    key = f"{datetime.now(MSK).strftime('%Y-%m-%d')}_{slot.hour:02d}:{slot.minute:02d}"
-    _published_today.add(key)
+    today = datetime.now(MSK).date()
+    mark_slot_published(today, slot)
 
 async def check_and_publish(app: Application):
     """Check regular schedule and extra posts."""
@@ -62,7 +66,6 @@ async def _publish_extra(app: Application, extra: dict):
         paths = extra.get("image_paths") or []
         logger.info(f"Publishing extra {extra['id']}: topic={topic}, text_len={len(text)}, photos={len(paths)}")
 
-        # Generate text if needed
         generated_image = None
         if not text:
             use_custom = bool(paths) or (topic and "реставрация кухонь" not in (topic or "").lower())
@@ -81,7 +84,6 @@ async def _publish_extra(app: Application, extra: dict):
             generated_image = result.get("image_path")
             logger.info(f"Generated for extra {extra['id']}: len={len(text)}, gen_image={generated_image}")
 
-        # Prefer user photos; fall back to generated image
         if not paths and generated_image and Path(generated_image).exists():
             paths = [generated_image]
             logger.info(f"Using generated image for extra {extra['id']}")
@@ -102,7 +104,6 @@ async def _publish_extra(app: Application, extra: dict):
                 for f in open_files:
                     f.close()
             else:
-                # photos listed but files missing
                 if text:
                     await app.bot.send_message(chat_id=chat_id, text=text)
         elif text:
@@ -113,34 +114,36 @@ async def _publish_extra(app: Application, extra: dict):
                 chat_id=settings.manager_chat_id,
                 text=f"Внеплановый пост опубликован (id {extra['id']})."
             )
-        logger.info(f"Extra {extra['id']} published successfully")
+        logger.info(f"Extra post {extra['id']} published successfully")
     except Exception as e:
-        logger.error(f"Extra publish failed: {e}", exc_info=True)
+        logger.error(f"Extra publish failed for id={extra.get('id')}: {e}", exc_info=True)
         if settings.manager_chat_id:
             try:
                 await app.bot.send_message(
                     chat_id=settings.manager_chat_id,
-                    text=f"Ошибка публикации внепланового (id {extra.get('id')}): {e}"
+                    text=f"Ошибка публикации внепланового поста {extra.get('id')}: {e}"
                 )
             except Exception:
                 pass
 
 async def _publish_scheduled(app: Application, slot: dtime):
+    """Generate and publish a regular scheduled post."""
     try:
         result = poster_graph.invoke({
-            "topic": "реставрация кухонь",
+            "topic": "",
             "text": None,
             "image_prompt": None,
             "image_path": None,
+            "image_paths": None,
             "draft_id": None,
             "error": None,
         })
-        draft_id = result.get("draft_id")
-        text = result.get("text", "")
+        text = result.get("text") or ""
         image_path = result.get("image_path")
+        draft_id = result.get("draft_id")
         short_topic = result.get("short_topic")
 
-        if not draft_id or not text:
+        if not text:
             logger.error("Scheduler: no draft generated")
             return
 
@@ -149,7 +152,6 @@ async def _publish_scheduled(app: Application, slot: dtime):
         caption = text
         rest = None
         if len(text) > 1024:
-            # Safety: split so photo has short caption, rest goes as separate message
             caption = text[:1000].rsplit(" ", 1)[0] + "…"
             rest = text[len(caption)-1:].strip()
             logger.info(f"Scheduler: text too long ({len(text)}), splitting")
@@ -167,7 +169,8 @@ async def _publish_scheduled(app: Application, slot: dtime):
         if rest and msg:
             await app.bot.send_message(chat_id=chat_id, text=rest, reply_to_message_id=msg.message_id)
 
-        update_draft_status(draft_id, "published")
+        if draft_id:
+            update_draft_status(draft_id, "published")
         if msg:
             save_post(draft_id, msg.message_id, text, topic=short_topic)
 
@@ -184,18 +187,17 @@ async def _publish_scheduled(app: Application, slot: dtime):
                 text=f"По расписанию ({slot.hour:02d}:{slot.minute:02d}) опубликован пост #{draft_id}."
             )
     except Exception as e:
-        logger.error(f"Scheduled publish failed: {e}")
+        logger.error(f"Scheduled publish failed for slot {slot}: {e}", exc_info=True)
         if settings.manager_chat_id:
             try:
                 await app.bot.send_message(
                     chat_id=settings.manager_chat_id,
-                    text=f"Ошибка публикации по расписанию: {e}"
+                    text=f"Ошибка публикации по расписанию ({slot}): {e}"
                 )
             except Exception:
                 pass
 
 def setup_scheduler(app: Application):
-    # Poll every 30 seconds — reliable and picks up schedule changes immediately
     slots = get_schedule()
     logger.info(f"Scheduler starting. Current slots (MSK): {[f'{s.hour:02d}:{s.minute:02d}' for s in slots] or 'none'}")
     scheduler.add_job(
@@ -206,4 +208,4 @@ def setup_scheduler(app: Application):
         replace_existing=True,
     )
     scheduler.start()
-    logger.info("Scheduler started (polling every 30s)")
+    logger.info("Scheduler started (polling every 30s, published slots tracked in DB)")
