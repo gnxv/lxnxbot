@@ -15,10 +15,11 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 
 # Soft image style hints per angle
+# Soft bias toward typical apartment kitchens (compact / L-shaped, limited space)
 ANGLE_IMAGE_HINTS = {
-    "example_style": "realistic photo of modern restored kitchen in soft pastel, beige, milk, olive or deep royal blue tones, clean and neat",
-    "problem_focus": "realistic close-up or unusual angle of a kitchen detail (drawers, worn edge, glossy doors, texture), natural lighting, expressive",
-    "cozy_old": "warm cozy older kitchen with soft natural light, lived-in but clean, wooden or muted warm tones, tea cups, everyday life details, occasionally a cat resting on a chair or windowsill",
+    "example_style": "realistic photo of modern restored apartment kitchen, compact or L-shaped cabinets along the wall, limited floor space, soft pastel beige milk olive or deep royal blue tones, clean and neat",
+    "problem_focus": "realistic close-up or unusual angle of a kitchen detail in a compact apartment kitchen (drawers, worn edge, glossy doors, texture), natural lighting, expressive",
+    "cozy_old": "warm cozy older apartment kitchen with soft natural light, compact layout, lived-in but clean, wooden or muted warm tones, tea cups, everyday life details, occasionally a cat resting on a chair or windowsill",
     "fairytale": "warm storybook-style kitchen illustration feel, soft light, natural wood, gentle old-fashioned cozy atmosphere, calm colors, not hyper-fantasy",
     "custom": "realistic photo of a kitchen",
 }
