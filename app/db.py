@@ -146,6 +146,15 @@ def get_recent_posts(limit: int = 12) -> list:
         )
         return [row["topic"] for row in cur.fetchall() if row["topic"]]
 
+def get_recent_post_texts(limit: int = 4) -> list:
+    """Return last N published post texts (for refinement / anti-repeat)."""
+    with db() as conn:
+        cur = conn.execute(
+            "SELECT text FROM posts WHERE text IS NOT NULL AND text != '' ORDER BY published_at DESC LIMIT %s",
+            (limit,)
+        )
+        return [row["text"] for row in cur.fetchall() if row["text"]]
+
 def get_pending_extras():
     with db() as conn:
         cur = conn.execute(

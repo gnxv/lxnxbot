@@ -9,7 +9,7 @@ from langgraph.graph import StateGraph, END
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
 from app.llm import get_poster_llm
-from app.db import save_draft, get_recent_posts
+from app.db import save_draft, get_recent_posts, get_recent_post_texts
 from app.config import settings
 
 logger = logging.getLogger(__name__)
@@ -89,6 +89,17 @@ class PostOutput(BaseModel):
         )
     )
 
+class RefineOutput(BaseModel):
+    """Improved version of the post after self-check."""
+    post_text: str = Field(description="Улучшенный текст поста, 450–650 символов. Живой разговорный стиль, 2–5 эмодзи.")
+    short_topic: str = Field(description="Короткая суть в 2–4 словах")
+    image_prompt: str = Field(
+        description=(
+            "Короткий промпт на английском для одной реалистичной фотографии под обновлённый текст. "
+            "Без before/after, без split, без comparison, без любого текста и надписей."
+        )
+    )
+
 SYSTEM_POSTER = """Ты — мастер по реставрации кухонь, который пишет живые посты для Telegram-канала.
 
 Пиши как будто объясняешь человеку, который думает обновить кухню, но боится большого ремонта.
@@ -107,6 +118,21 @@ SYSTEM_POSTER = """Ты — мастер по реставрации кухон�
 Для картинки:
 - Одна реалистичная фотография, которая подходит под тему поста.
 - Запрещено: before/after, split, comparison, любой текст, надписи на одежде, логотипы.
+"""
+
+SYSTEM_REFINE = """Ты редактор постов для Telegram-канала про реставрацию кухонь.
+
+Тебе дают уже написанный пост и последние опубликованные посты. Твоя задача — улучшить текст, а не переписывать его с нуля.
+
+Что сделать:
+- Сделай язык живее и естественнее, убери воду и канцеляризмы.
+- Сохрани основную идею и тон угла.
+- Длина 450–650 символов, 2–5 эмодзи естественно.
+- Если тема или формулировки сильно пересекаются с последними постами — мягко смести акцент или переформулируй так, чтобы не было ощущения повтора. Не меняй тему полностью, если можно обойтись уточнением.
+- Не добавляй название организации и город.
+- Обнови image_prompt, если текст изменился.
+
+Верни улучшенную версию.
 """
 
 def generate_post_node(state: PosterState) -> PosterState:
@@ -173,6 +199,40 @@ def generate_post_node(state: PosterState) -> PosterState:
         state["short_topic"] = "обновление выгоднее"
         state["image_prompt"] = "realistic photo of modern restored kitchen"
         state["error"] = str(e)
+
+    return state
+
+def refine_post_node(state: PosterState) -> PosterState:
+    """One refinement pass: improve the text and gently avoid recent repeats."""
+    if not state.get("text"):
+        return state
+
+    recent_texts = get_recent_post_texts(4)
+    recent_block = ""
+    if recent_texts:
+        recent_block = "\n\nПоследние опубликованные посты (не повторяй близкие идеи и формулировки):\n" + "\n---\n".join(recent_texts)
+
+    refine_prompt = (
+        f"Текущий пост:\n{state['text']}\n\n"
+        f"Короткая тема: {state.get('short_topic', '')}\n"
+        f"Угол: {state.get('angle_name', '')}"
+        f"{recent_block}\n\n"
+        "Улучши текст. Если тема слишком близка к недавним постам — мягко смести акцент или переформулируй. "
+        "Сохрани живой разговорный стиль."
+    )
+
+    try:
+        llm = get_poster_llm().with_structured_output(RefineOutput)
+        result: RefineOutput = llm.invoke([
+            SystemMessage(content=SYSTEM_REFINE),
+            HumanMessage(content=refine_prompt)
+        ])
+        state["text"] = result.post_text
+        state["short_topic"] = result.short_topic
+        state["image_prompt"] = result.image_prompt
+        logger.info(f"Poster: post refined, length={len(result.post_text)}, topic={result.short_topic}")
+    except Exception as e:
+        logger.warning(f"Poster refinement failed, keeping original: {e}")
 
     return state
 
@@ -273,11 +333,13 @@ def save_draft_node(state: PosterState) -> PosterState:
 def build_poster_graph():
     workflow = StateGraph(PosterState)
     workflow.add_node("generate_post", generate_post_node)
+    workflow.add_node("refine_post", refine_post_node)
     workflow.add_node("generate_image", generate_image_node)
     workflow.add_node("save_draft", save_draft_node)
 
     workflow.set_entry_point("generate_post")
-    workflow.add_edge("generate_post", "generate_image")
+    workflow.add_edge("generate_post", "refine_post")
+    workflow.add_edge("refine_post", "generate_image")
     workflow.add_edge("generate_image", "save_draft")
     workflow.add_edge("save_draft", END)
 
