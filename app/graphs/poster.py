@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 ANGLE_IMAGE_HINTS = {
     "example_style": "realistic photo of modern restored kitchen in soft pastel, beige, milk, olive or deep royal blue tones, clean and neat",
     "problem_focus": "realistic close-up or unusual angle of a kitchen detail (drawers, worn edge, glossy doors, texture), natural lighting, expressive",
-    "cozy_old": "warm cozy older kitchen with soft natural light, lived-in but clean, wooden or muted warm tones, tea cups or everyday life details",
+    "cozy_old": "warm cozy older kitchen with soft natural light, lived-in but clean, wooden or muted warm tones, tea cups, everyday life details, occasionally a cat resting on a chair or windowsill",
     "fairytale": "warm storybook-style kitchen illustration feel, soft light, natural wood, gentle old-fashioned cozy atmosphere, calm colors, not hyper-fantasy",
     "custom": "realistic photo of a kitchen",
 }
@@ -49,6 +49,8 @@ POST_ANGLES = [
             "Напиши пост про уютную старую кухню с историей.\n"
             "Тёплые наблюдения про привычки, семейные моменты или вещи, с которыми не хочется расставаться.\n"
             "Допускаются ностальгия и мягкий юмор. Не обязательно прямо говорить про реставрацию в каждом посте.\n"
+            "Не начинай каждый раз со слов «старая кухня» — меняй заход.\n"
+            "Иногда можно упомянуть кота, но не в каждом посте.\n"
             "Тон спокойный и душевный."
         ),
     },
@@ -79,7 +81,7 @@ class PosterState(TypedDict):
 
 class PostOutput(BaseModel):
     """Structured output for a channel post."""
-    post_text: str = Field(description="Готовый текст поста на русском, 450–650 символов. Живой, понятный, разговорный. С 2–5 эмодзи. Без жёсткой продажи.")
+    post_text: str = Field(description="Готовый текст поста на русском, 450–650 символов. Живой, понятный, разговорный. С 3–5 эмодзи. Без жёсткой продажи.")
     short_topic: str = Field(description="Короткая суть в 2–4 словах")
     image_prompt: str = Field(
         description=(
@@ -91,7 +93,7 @@ class PostOutput(BaseModel):
 
 class RefineOutput(BaseModel):
     """Improved version of the post after self-check."""
-    post_text: str = Field(description="Улучшенный текст поста, 450–650 символов. Живой разговорный стиль, 2–5 эмодзи.")
+    post_text: str = Field(description="Улучшенный текст поста, 450–650 символов. Живой разговорный стиль, 3–5 эмодзи.")
     short_topic: str = Field(description="Короткая суть в 2–4 словах")
     image_prompt: str = Field(
         description=(
@@ -109,7 +111,7 @@ SYSTEM_POSTER = """Ты — мастер по реставрации кухон�
 - Один пост — одна идея, наблюдение или маленькая история.
 - Короткие абзацы. Простой живой язык без канцеляризмов.
 - Длина 450–650 символов.
-- Эмодзи используй обязательно, естественно, как в живом разговоре: минимум 2, максимум 5. Только если усиливают смысл.
+- Эмодзи используй обязательно, естественно, как в живом разговоре: минимум 3, максимум 5. Только если усиливают смысл.
 - Не повторяй одни и те же идеи и формулировки.
 - Без точных цен. Можно мягко предложить прислать фото, но без навязчивых продаж и одинаковых концовок.
 - Не выдумывай редкие поломки и неподтверждённые обещания.
@@ -127,7 +129,7 @@ SYSTEM_REFINE = """Ты редактор постов для Telegram-канал
 Что сделать:
 - Сделай язык живее и естественнее, убери воду и канцеляризмы.
 - Сохрани основную идею и тон угла.
-- Длина 450–650 символов, 2–5 эмодзи естественно.
+- Длина 450–650 символов, 3–5 эмодзи естественно.
 - Если тема или формулировки сильно пересекаются с последними постами — мягко смести акцент или переформулируй так, чтобы не было ощущения повтора. Не меняй тему полностью, если можно обойтись уточнением.
 - Не добавляй название организации и город.
 - Обнови image_prompt, если текст изменился.
