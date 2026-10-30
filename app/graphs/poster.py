@@ -16,10 +16,10 @@ logger = logging.getLogger(__name__)
 
 # Soft image style hints per angle
 ANGLE_IMAGE_HINTS = {
-    "example_style": "realistic photo of modern restored kitchen in soft pastel, beige or deep royal blue tones, clean and neat",
-    "problem_focus": "realistic photo of a kitchen highlighting one specific issue area (drawers, worn edge, glossy doors or mismatched look), natural lighting",
-    "cozy_old": "warm cozy older kitchen with soft natural light, one or a few people casually drinking tea or sitting at the table, lived-in but clean, wooden or muted tones",
-    "fairytale": "realistic photo of a characterful kitchen inspired by a fairy-tale or storybook feel (Winnie the Pooh, gentle fantasy, or mild medieval/cozy story vibe), warm wood, soft lighting, not hyper-fantasy, no magic effects",
+    "example_style": "realistic photo of modern restored kitchen in soft pastel, beige, milk, olive or deep royal blue tones, clean and neat",
+    "problem_focus": "realistic close-up or unusual angle of a kitchen detail (drawers, worn edge, glossy doors, texture), natural lighting, expressive",
+    "cozy_old": "warm cozy older kitchen with soft natural light, lived-in but clean, wooden or muted warm tones, tea cups or everyday life details",
+    "fairytale": "warm storybook-style kitchen illustration feel, soft light, natural wood, gentle old-fashioned cozy atmosphere, calm colors, not hyper-fantasy",
     "custom": "realistic photo of a kitchen",
 }
 
@@ -28,37 +28,37 @@ POST_ANGLES = [
     {
         "name": "example_style",
         "instruction": (
-            "Напиши пост в живом разговорном стиле.\n"
-            "Можно начать с частых вопросов заказчиков (разберут ли всю кухню, будет ли грязь, а вдруг цвет не понравится и т.п.).\n"
-            "Объясни, зачем менять всю кухню, если она ещё крепкая. Коротко расскажи, что делаем: снимаем фасады, приводим в порядок, красим, при необходимости меняем фурнитуру.\n"
-            "Цвет выбираем вместе. Если мебель уже не спасти — так и скажи.\n"
-            "В конце можно мягко предложить прислать фото. Эмодзи используй естественно."
+            "Напиши пост в живом разговорном стиле от лица мастера.\n"
+            "Можно начать с вопросов заказчиков, сомнений или короткого профессионального совета.\n"
+            "Объясни простым языком, что оставляем каркас и обновляем фасады, фурнитуру, при необходимости столешницу.\n"
+            "Тон дружелюбный и уверенный. Эмодзи используй естественно."
         ),
     },
     {
         "name": "problem_focus",
         "instruction": (
-            "Напиши пост с акцентом на одну конкретную проблему.\n"
-            "Выбери одну узнаваемую ситуацию: тугие ящики, потёртый торец, глянец подчёркивает царапины, разрозненный вид, старые ручки и т.п.\n"
-            "Коротко объясни, почему так бывает и как это решаем в рамках реставрации (что оставляем, что обновляем).\n"
-            "Закончи тем, как кухня стала удобнее и выглядит цельно. Не уходи в редкие поломки."
+            "Напиши пост про одну конкретную проблему или интересную деталь кухни.\n"
+            "Можешь разрушать заблуждение, удивлять или коротко объяснять, почему так бывает.\n"
+            "Покажи, как это решаем в рамках обновления, не уходя в редкие поломки.\n"
+            "Сделай даже обычную ситуацию интересной."
         ),
     },
     {
         "name": "cozy_old",
         "instruction": (
-            "Напиши пост про уютную старенькую кухню, которую можно обновить.\n"
-            "Покажи, что даже если кухня уже не новая, её можно сделать свежее и удобнее: обновить фасады, фурнитуру, при необходимости столешницу, оставив добрый каркас.\n"
-            "Тон тёплый и спокойный. Не начинай каждый раз одинаково."
+            "Напиши пост про уютную старую кухню с историей.\n"
+            "Тёплые наблюдения про привычки, семейные моменты или вещи, с которыми не хочется расставаться.\n"
+            "Допускаются ностальгия и мягкий юмор. Не обязательно прямо говорить про реставрацию в каждом посте.\n"
+            "Тон спокойный и душевный."
         ),
     },
     {
         "name": "fairytale",
         "instruction": (
-            "Напиши пост в лёгком сказочном или историческом вайбе.\n"
-            "Можно вдохновиться кухнями из сказок или историй: уютная деревянная кухня как у Винни-Пуха, мягкий средневековый вайб, уютная кухня из сказки или фэнтези без перегиба.\n"
-            "Главное — уют, дерево, тёплые тона и то, что такую кухню тоже можно обновить или сделать с характером.\n"
-            "Без гипер-фэнтези, без магии и без нереальных существ. Просто уютный вайб."
+            "Напиши пост с лёгким сказочным или уютно-историческим вайбом.\n"
+            "Можно оживлять предметы через повествование или придумать короткую добрую историю.\n"
+            "Без гипер-фэнтези, без магии и без копирования известных персонажей.\n"
+            "Главное — уют, дерево и спокойная атмосфера."
         ),
     },
 ]
@@ -85,28 +85,28 @@ class PostOutput(BaseModel):
         description=(
             "Короткий промпт на английском для одной реалистичной фотографии. "
             "Только один кадр. Стиль под тему поста. "
-            "Без before/after, без split, без comparison, без текста на картинке."
+            "Без before/after, без split, без comparison, без любого текста, надписей, логотипов."
         )
     )
 
-SYSTEM_POSTER = """Ты — мастер по реставрации кухонь, который ведёт Telegram-канал организации «РЕСТАВРАТОР» (Воронеж и область).
+SYSTEM_POSTER = """Ты — мастер по реставрации кухонь, который пишет живые посты для Telegram-канала.
 
-Пиши живые, понятные посты в разговорном стиле. Как будто объясняешь человеку, который боится затевать ремонт.
+Пиши как будто объясняешь человеку, который думает обновить кухню, но боится большого ремонта.
 
 Важно:
 - Не пиши так, будто ты лично сделал именно ту кухню, которая на картинке. Картинка — просто иллюстрация. Пиши про подход и типичные ситуации.
-- Один пост — одна идея или типичный сценарий.
-- Короткие абзацы. Простой уверенный язык.
+- Один пост — одна идея, наблюдение или маленькая история.
+- Короткие абзацы. Простой живой язык без канцеляризмов.
 - Длина 450–650 символов.
-- Эмодзи используй обязательно, естественно, как в живом разговоре: минимум 2, максимум 5. Не украшай ради украшательства.
-- В конце каждого поста мягко и лаконично упомяни, что реставрируем кухни. Если мысль перекликается с темой — обыграй естественно: «такие работы делаем в Воронеже и области» или похожее. Можно коротко упомянуть название «РЕСТАВРАТОР». Без жёсткой продажи.
-- Без точных цен. Можно мягко предложить прислать фото.
-- Не выдумывай редкие поломки.
-- Не повторяй последние темы и одинаковые заходы.
+- Эмодзи используй обязательно, естественно, как в живом разговоре: минимум 2, максимум 5. Только если усиливают смысл.
+- Не повторяй одни и те же идеи и формулировки.
+- Без точных цен. Можно мягко предложить прислать фото, но без навязчивых продаж и одинаковых концовок.
+- Не выдумывай редкие поломки и неподтверждённые обещания.
+- Не упоминай название организации и город.
 
 Для картинки:
 - Одна реалистичная фотография, которая подходит под тему поста.
-- Запрещено: before/after, split, comparison, текст на картинке.
+- Запрещено: before/after, split, comparison, любой текст, надписи на одежде, логотипы.
 """
 
 def generate_post_node(state: PosterState) -> PosterState:
@@ -166,11 +166,11 @@ def generate_post_node(state: PosterState) -> PosterState:
     except Exception as e:
         logger.error(f"Poster structured generation failed: {e}")
         state["text"] = (
-            "Реставрация кухни часто обходится в 3–5 раз дешевле новой. "
+            "Обновление кухни часто обходится в 3–5 раз дешевле новой. "
             "Покраска фасадов, замена фурнитуры и столешницы дают эффект «как новая» "
             "без полного демонтажа. Главное — правильная подготовка поверхности."
         )
-        state["short_topic"] = "реставрация выгоднее"
+        state["short_topic"] = "обновление выгоднее"
         state["image_prompt"] = "realistic photo of modern restored kitchen"
         state["error"] = str(e)
 
@@ -183,7 +183,7 @@ def _safe_image_prompt(raw: str, angle_name: str = "example_style") -> str:
     hint = ANGLE_IMAGE_HINTS.get(angle_name, ANGLE_IMAGE_HINTS["example_style"])
 
     if not raw or not raw.strip():
-        return f"realistic photo of {hint}, clean lighting, no text"
+        return f"realistic photo of {hint}, clean lighting, no text, no logos, no writing"
 
     text = raw.strip()
     bad_patterns = [
@@ -207,7 +207,10 @@ def _safe_image_prompt(raw: str, angle_name: str = "example_style") -> str:
     if len(text) > 180:
         text = text[:180].rsplit(" ", 1)[0]
 
-    suffix = f", realistic photography, single photo, {hint}, clean professional lighting, no clutter, no text"
+    suffix = (
+        f", realistic photography, single photo, {hint}, clean professional lighting, "
+        "no clutter, no text, no letters, no logos, no writing on clothes, no inscriptions"
+    )
     return (text + suffix).strip()
 
 def generate_image_node(state: PosterState) -> PosterState:
@@ -248,7 +251,7 @@ def generate_image_node(state: PosterState) -> PosterState:
             from PIL import Image, ImageDraw
             img = Image.new("RGB", (1024, 1024), color=(245, 245, 245))
             d = ImageDraw.Draw(img)
-            d.text((80, 480), "Kitchen Restoration", fill=(60, 60, 60))
+            d.text((80, 480), "Kitchen", fill=(60, 60, 60))
             img.save(image_path)
             state["image_path"] = str(image_path)
             logger.info("Poster: fell back to placeholder image")
